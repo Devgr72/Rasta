@@ -10,5 +10,5 @@ const filter = process.argv[2] && !process.argv[2].startsWith('--') ? process.ar
 const passthrough = process.argv.slice(2).filter((a) => a.startsWith('--'));
 const files = fs.readdirSync(dir).filter((f) => f.endsWith('.test.js') && (!filter || f.includes(filter))).map((f) => path.join(dir, f));
 if (!files.length) { console.error('no test files matched'); process.exit(1); }
-const r = spawnSync(process.execPath, ['--test', ...passthrough, ...files], { stdio: 'inherit' });
+const r = spawnSync(process.execPath, ['--test', ...passthrough, ...files], { stdio: 'inherit', env: { ...process.env, NODE_ENV: process.env.NODE_ENV || 'test' } });
 process.exit(r.status ?? 1);

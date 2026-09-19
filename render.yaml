@@ -1,0 +1,53 @@
+# Render Blueprint — https://render.com/docs/blueprint-spec
+#
+# Why Render rather than Fly: the app is one Node process with one SQLite file, and Render's
+# web service + persistent disk is the shortest path to exactly that (disk mounted at /app/data,
+# health-checked, HTTPS and a domain out of the box, deploys from this repo on push). The same
+# Dockerfile works anywhere else — see README → Deploying for docker compose on a VPS.
+#
+# Notes: a persistent disk needs a paid instance type and pins the service to a single instance
+# (SQLite wants exactly one writer anyway). Render terminates TLS at its proxy, so trust one hop.
+services:
+  - type: web
+    name: rasta
+    runtime: docker
+    plan: starter
+    region: singapore          # closest Render region to Delhi
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /api/health
+    numInstances: 1
+    autoDeploy: true
+    disk:
+      name: rasta-data
+      mountPath: /app/data
+      sizeGB: 5
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: "3000"
+      - key: RASTA_DB
+        value: /app/data/rasta.db
+      - key: RASTA_UPLOAD_DIR
+        value: /app/data/uploads   # one disk per service, so uploads live on it too
+      - key: RASTA_TRUST_PROXY
+        value: "1"
+      - key: LOG_FORMAT
+        value: json
+      - key: ANTHROPIC_API_KEY
+        sync: false                # set in the dashboard; never in the repo
+      - key: RASTA_ADMIN_TOKEN
+        generateValue: true
+      - key: RASTA_DAILY_TOKEN_BUDGET
+        value: "3000000"
+      - key: RASTA_VISION_CONCURRENCY
+        value: "4"
+      # Production routing and tiles — the public demo servers are for development only.
+      - key: OSRM_BASE
+        sync: false
+      - key: RASTA_TILE_URL
+        sync: false
+      - key: RASTA_TILE_ATTRIBUTION
+        sync: false
+      - key: SENTRY_DSN
+        sync: false

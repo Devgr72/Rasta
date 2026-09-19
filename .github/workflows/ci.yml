@@ -24,3 +24,34 @@ jobs:
       - run: npm ci
       - run: npm run lint
       - run: npm test
+
+  docker:
+    name: docker build + smoke
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          load: true
+          tags: rasta:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Boot the container in mock mode and hit the API
+        run: |
+          docker run -d --name rasta -p 3000:3000 -e RASTA_MOCK_VISION=1 rasta:ci
+          for i in $(seq 1 30); do
+            if curl -fsS http://localhost:3000/api/health >/dev/null 2>&1; then break; fi; sleep 1;
+          done
+          curl -fsS http://localhost:3000/api/health | tee health.json
+          grep -q '"ok":true' health.json
+          curl -fsS http://localhost:3000/api/segments | grep -q FeatureCollection
+          curl -fsS -o /dev/null -w '%{http_code}\n' 'http://localhost:3000/report.html?id=1' | grep -q 200
+          docker inspect --format '{{.State.Health.Status}}' rasta
+          docker logs rasta | tail -20
+      - if: always()
+        run: docker rm -f rasta || true

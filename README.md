@@ -86,6 +86,10 @@ it never reaches the browser.
 | `RASTA_MAX_UPLOAD_MB` | `server.js` | `40` | Total photo bytes allowed in one request (also the JSON body limit) |
 | `RASTA_MAX_IMAGE_PX` | `server.js` | `6000` | Longest decoded side allowed per photo |
 | `RASTA_ADMIN_TOKEN` | `server.js` | unset | Enables `DELETE /api/segments/:id` with `Authorization: Bearer <token>` |
+| `LOG_LEVEL` | `lib/log.js` | `info` | pino level (`debug`, `info`, `warn`, `error`, `silent`) |
+| `LOG_FORMAT` | `lib/log.js` | pretty on a TTY, else json | `json` for one structured line per request; `pretty` for humans |
+| `SENTRY_DSN` | `lib/sentry.js` | unset | Enables error reporting (unhandled errors, 500s) to Sentry via the envelope API — no SDK |
+| `SENTRY_RELEASE` | `lib/sentry.js` | `rasta@<version>` | Release tag on Sentry events |
 | `BASE` | `scripts/*.js` | `http://localhost:3000` | Target for the browser scripts |
 | `CHROME` | `scripts/*.js` | per-OS default | Chrome binary for the browser scripts |
 | `OUT` | `scripts/*.js` | OS temp dir | Screenshot output directory |
@@ -194,11 +198,94 @@ as `41 of 47 hazards found across 8 photos`. The full report is written to `eval
 
 ## Deploying
 
-_To be filled in Phase 6 (Docker image, docker-compose, hosted volume, key rotation, SQLite restore)._
+The app is one Node process and one SQLite file. Anything that can run a container with a persistent
+disk can run it. Every path below keeps `node server.js` working locally with just `.env`.
 
-Until then: any Node 20+ host with a persistent disk works. Mount `data/` and `uploads/`, set
-`ANTHROPIC_API_KEY` and `PORT`. Leaflet is served from `node_modules`; map tiles come from
-openstreetmap.org and fonts from Google.
+### Docker
+
+```bash
+docker build -t rasta .
+docker run -d --name rasta -p 3000:3000 --env-file .env   -v rasta-data:/app/data -v rasta-uploads:/app/uploads rasta
+curl -s localhost:3000/api/health
+```
+
+The image is multi-stage (`node:20-slim`; build tools only in the build stage), runs as the non-root
+`node` user, installs with `npm ci --omit=dev`, and has a `HEALTHCHECK` on `/api/health`. The
+database is `/app/data/rasta.db`, photos are under `/app/uploads`; both must be volumes or you lose
+them on the next deploy. Migrations run automatically at boot.
+
+### docker compose
+
+```bash
+docker compose up -d                       # app on :3000, named volumes rasta-data + rasta-uploads
+docker compose --profile routing up -d     # + self-hosted OSRM on :5000 (after scripts/osrm-prepare.sh)
+OSRM_BASE=http://osrm:5000 docker compose --profile routing up -d   # make the app use it
+```
+
+`.env` is read by the app service if present. Set `RASTA_TRUST_PROXY=1` when a reverse proxy
+(nginx, Caddy, Traefik) terminates TLS in front of it.
+
+### Render (blueprint in `render.yaml`)
+
+Render was chosen over Fly because a single web service with a persistent disk mounted at `/app/data`
+is exactly this app's shape, deploys straight from the repo on push, and comes with TLS and a health
+check with no extra files. (Fly would work equally well with a volume; the Dockerfile is the same.)
+
+1. New → Blueprint → point at this repo. Render reads `render.yaml`: Docker runtime, `starter` plan
+   (disks need a paid instance), Singapore region, 5 GB disk at `/app/data`, health check `/api/health`,
+   one instance (SQLite wants one writer).
+2. In the service's Environment tab set the secrets marked `sync: false`: `ANTHROPIC_API_KEY`,
+   `OSRM_BASE`, `RASTA_TILE_URL`, `RASTA_TILE_ATTRIBUTION`, optionally `SENTRY_DSN`.
+   `RASTA_ADMIN_TOKEN` is generated for you.
+3. Deploy. Uploads live on the same disk (`RASTA_UPLOAD_DIR=/app/data/uploads`) because Render allows
+   one disk per service; or set `RASTA_STORAGE=s3` and the `RASTA_S3_*` variables to put photos in a bucket.
+
+### Logging and errors
+
+Every request gets one JSON log line (pino) with `req.id`, method, URL, status and duration. The id is
+echoed as `X-Request-Id` (a caller-supplied one is kept) and appears in 500 responses as `request_id`,
+so a user report can be matched to a log line. Static assets and photos are not logged. The
+`[vision] … Nms` and `[segment]` console lines stay as they are — they are the ones read out during demos.
+
+Set `SENTRY_DSN` and unhandled errors, 500s and process crashes are posted to Sentry (envelope API,
+no SDK dependency). Events carry the request id, URL, release and environment.
+
+### Rotating the Anthropic key
+
+The key is read once at boot by `vision.js` and never leaves the server. To rotate:
+
+1. Create the new key in the Anthropic console.
+2. Set it where the server reads it — `.env` locally, the Environment tab on Render, `--env-file` or
+   the compose `.env` for Docker — and restart (Render restarts on env change; `docker compose up -d`
+   recreates the container).
+3. Confirm `/api/health` shows `"mock": false`, then upload one photo through the Contribute tab and
+   check `/api/stats` → `vision.today.model_calls` incremented.
+4. Delete the old key in the console. Cached results are keyed by photo hash, not by key, so nothing is lost.
+
+### Backing up and restoring the SQLite file
+
+The database is in WAL mode, so copy it with SQLite rather than `cp` while the app is running:
+
+```bash
+# backup (inside the container or on the host with sqlite3 installed)
+docker exec rasta node -e "require('better-sqlite3')('/app/data/rasta.db').backup('/app/data/backup-'+Date.now()+'.db').then(()=>console.log('ok'))"
+docker cp rasta:/app/data/backup-<ts>.db ./rasta-backup.db
+```
+
+Render disks take daily snapshots (Disks tab → Snapshots → Restore). Restoring a snapshot replaces the
+whole disk — including uploads if they live on it — so stop the service, restore, start it.
+
+To restore a file you copied out yourself:
+
+```bash
+docker compose stop app
+docker run --rm -v rasta-data:/data -v "$PWD":/backup alpine   sh -c "rm -f /data/rasta.db /data/rasta.db-wal /data/rasta.db-shm && cp /backup/rasta-backup.db /data/rasta.db"
+docker compose start app
+```
+
+Migrations re-run at boot against whatever version the restored file is at, so an older backup is
+upgraded automatically. Vision cache entries are in the same file (`vision_calls.result`), so a
+restore also restores the cache.
 
 ## Layout
 
@@ -211,6 +298,8 @@ knowledge/           standards.json — 21 hazard types, dimensional standards, 
 public/              index.html, app.js, map.js, styles.css, report.html, demo/
 data/                seed.json, demo-route.json (rasta.db and vision-cache/ are gitignored)
 evals/               cases.json ground truth, run.js, photos/ (gitignored contents)
-scripts/             lint.js, mock.js, browser-check.js, shoot.js
+scripts/             lint.js, test.js, mock.js, browser-check.js, shoot.js, osrm-prepare.sh
+lib/                 storage.js, osrm.js, exif.js, image-size.js, semaphore.js, log.js, sentry.js
+Dockerfile, docker-compose.yml, render.yaml, .github/workflows/ci.yml
 tests/               node:test suites
 ```

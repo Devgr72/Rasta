@@ -12,6 +12,12 @@ const { imageSize } = require('./lib/image-size');
 const { createStorage } = require('./lib/storage');
 const exif = require('./lib/exif');
 const osrm = require('./lib/osrm');
+const { logger, httpLogger } = require('./lib/log');
+const { createSentry } = require('./lib/sentry');
+const pkg = require('./package.json');
+
+const sentry = createSentry({ release: process.env.SENTRY_RELEASE || `rasta@${pkg.version}` });
+sentry.installProcessHandlers();
 
 const PORT = Number(process.env.PORT) || 3000;
 const UPLOAD_DIR = process.env.RASTA_UPLOAD_DIR || path.join(__dirname, 'uploads');
@@ -30,6 +36,7 @@ db.setUrlBuilder((f) => storage.url(f));
 
 const app = express();
 app.disable('x-powered-by');
+app.use(httpLogger); // one JSON line per request with a request id (echoed as X-Request-Id)
 
 // Behind a reverse proxy (Render, Fly, nginx) set RASTA_TRUST_PROXY to the number of hops so
 // req.ip is the client, not the proxy. Never `true`: that lets anyone spoof X-Forwarded-For.
@@ -230,7 +237,10 @@ async function analyseAndSave({ name, start, end }, buffers, onPhoto, hints = []
 app.get('/api/health', (_req, res) => {
   let budget_reached = false;
   try { budget_reached = vision.usage().budget_reached; } catch { /* stats are best-effort */ }
-  res.json({ ok: true, model: vision.MODEL, mock: vision.MOCK, concurrency: vision.CONCURRENCY, daily_token_budget: vision.DAILY_BUDGET || null, budget_reached, storage: storage.kind, schema_version: db.MIGRATIONS.length });
+  res.json({
+    ok: true, model: vision.MODEL, mock: vision.MOCK, concurrency: vision.CONCURRENCY, daily_token_budget: vision.DAILY_BUDGET || null, budget_reached,
+    storage: storage.kind, schema_version: db.MIGRATIONS.length, version: pkg.version, uptime_s: Math.round(process.uptime()), sentry: sentry.enabled,
+  });
 });
 
 app.get('/api/standards', (_req, res) => res.json(scoring.STANDARDS));
@@ -377,18 +387,20 @@ function seedIfEmpty() {
   } catch (err) { console.warn('[seed] skipped:', err.message); }
 }
 
-app.use((err, _req, res, _next) => {
-  console.error('[http]', err.message);
+app.use((err, req, res, _next) => {
   if (err instanceof multer.MulterError) return fail(res, 400, `upload: ${err.message}`);
   if (err.type === 'entity.too.large') return fail(res, 413, `request body over ${MAX_UPLOAD_MB} MB`);
   if (err.type === 'entity.parse.failed') return fail(res, 400, 'malformed JSON body');
-  fail(res, 500, 'server error');
+  (req.log || logger).error({ err, request_id: req.id }, `[http] ${err.message}`);
+  sentry.captureException(err, { request_id: req.id, request: { method: req.method, url: req.originalUrl } });
+  fail(res, 500, 'server error', { request_id: req.id });
 });
 
 function start(port = PORT) {
   seedIfEmpty();
   return app.listen(port, () => {
     console.log(`Rasta on http://localhost:${port}  model=${vision.MODEL}${vision.MOCK ? ' (MOCK vision — add ANTHROPIC_API_KEY to .env)' : ''}`);
+    logger.info({ port, version: pkg.version, model: vision.MODEL, mock: vision.MOCK, storage: storage.kind, osrm: osrm.OSRM_BASE, sentry: sentry.enabled, schema_version: db.MIGRATIONS.length }, 'rasta started');
   });
 }
 

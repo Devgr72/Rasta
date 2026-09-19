@@ -37,6 +37,14 @@ describe('GET endpoints', () => {
     const j = await r.json();
     assert.equal(j.ok, true); assert.equal(j.mock, true); assert.equal(j.model, 'claude-fable-5-1');
     assert.equal(j.storage, 'local'); assert.ok(j.schema_version >= 2);
+    assert.equal(j.version, require('../package.json').version); assert.equal(j.sentry, false);
+    assert.match(r.headers.get('x-request-id'), /^[0-9a-f-]{36}$/, 'a request id is generated');
+  });
+  test('a caller-supplied X-Request-Id is echoed; garbage is replaced', async () => {
+    const r = await fetch(base + '/api/health', { headers: { 'x-request-id': 'trace-abc-123' } });
+    assert.equal(r.headers.get('x-request-id'), 'trace-abc-123');
+    const r2 = await fetch(base + '/api/health', { headers: { 'x-request-id': 'bad id with spaces' } });
+    assert.notEqual(r2.headers.get('x-request-id'), 'bad id with spaces');
   });
   test('/api/config exposes tile + limit settings and nothing secret', async () => {
     const j = await (await fetch(base + '/api/config')).json();
