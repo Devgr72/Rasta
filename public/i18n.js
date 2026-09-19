@@ -5,6 +5,12 @@
   const STRINGS = {
     en: {
       'tab.map': 'Map', 'tab.walk': 'Walk', 'tab.route': 'Route',
+      'st.observed': 'Observed {ago}', 'st.present': 'Still present', 'st.cleared': 'Reported cleared', 'st.recheck': 'Needs rechecking',
+      'st.observed.long': 'Temporary. Seen {ago}; trusted for a day, then it needs a fresh look.', 'st.present.long': 'Confirmed on a recheck {ago}.', 'st.present.struct': 'Structural barrier. Stays on the map until someone reports it fixed.', 'st.cleared.long': 'Reported cleared {ago}. No longer counts in the score.', 'st.recheck.long': 'Temporary observation from {ago}. It may be gone; nobody has checked.',
+      'st.still': 'Still here', 'st.clear': 'Cleared', 'st.back': "It's back", 'st.photo': 'Add photo', 'st.photo.hint': 'A photo makes the status change count for more.',
+      'st.updated.present': 'Marked still present. Score recalculated.', 'st.updated.cleared': 'Marked cleared. Score recalculated.', 'st.failed': 'Could not update status: {err}',
+      'ago.now': 'just now', 'ago.min': '{n} minutes ago', 'ago.min1': '1 minute ago', 'ago.hr': '{n} hours ago', 'ago.hr1': '1 hour ago', 'ago.day': '{n} days ago', 'ago.day1': 'yesterday', 'ago.unknown': 'at an unknown time',
+      'legend.temp': 'dashed pin: temporary, needs rechecking',
       'hz.submit': 'Open {auth} portal', 'hz.submit.any': 'File on Delhi PGMS', 'hz.copied.next': 'Complaint draft for {auth} copied. Paste it into the portal that just opened.',
       'seg.pins': 'Numbered pins on the map show roughly where each hazard was photographed.',
       'tip.osm': 'from OSM tags', 'tip.clear': 'no hazards recorded',
@@ -89,6 +95,12 @@
     },
     hi: {
       'tab.map': 'नक्शा', 'tab.walk': 'चलें', 'tab.route': 'रास्ता',
+      'st.observed': '{ago} देखा गया', 'st.present': 'अभी भी मौजूद', 'st.cleared': 'हटाने की सूचना', 'st.recheck': 'दोबारा जाँच चाहिए',
+      'st.observed.long': 'अस्थायी। {ago} देखा गया; एक दिन तक भरोसेमंद, फिर नई जाँच चाहिए।', 'st.present.long': 'दोबारा जाँच में {ago} पुष्टि हुई।', 'st.present.struct': 'स्थायी बाधा। जब तक कोई ठीक होने की सूचना न दे, नक्शे पर रहेगी।', 'st.cleared.long': '{ago} हटाने की सूचना मिली। अब स्कोर में नहीं गिना जाता।', 'st.recheck.long': '{ago} की अस्थायी टिप्पणी। हो सकता है हट गया हो; किसी ने जाँचा नहीं।',
+      'st.still': 'अभी भी है', 'st.clear': 'हट गया', 'st.back': 'वापस आ गया', 'st.photo': 'फोटो जोड़ें', 'st.photo.hint': 'फोटो से स्थिति बदलने का भरोसा बढ़ता है।',
+      'st.updated.present': 'अभी भी मौजूद दर्ज किया। स्कोर फिर से निकाला गया।', 'st.updated.cleared': 'हटाया गया दर्ज किया। स्कोर फिर से निकाला गया।', 'st.failed': 'स्थिति नहीं बदल सकी: {err}',
+      'ago.now': 'अभी-अभी', 'ago.min': '{n} मिनट पहले', 'ago.min1': '1 मिनट पहले', 'ago.hr': '{n} घंटे पहले', 'ago.hr1': '1 घंटा पहले', 'ago.day': '{n} दिन पहले', 'ago.day1': 'कल', 'ago.unknown': 'अज्ञात समय पर',
+      'legend.temp': 'बिंदीदार पिन: अस्थायी, दोबारा जाँच चाहिए',
       'hz.submit': '{auth} पोर्टल खोलें', 'hz.submit.any': 'दिल्ली PGMS पर दर्ज करें', 'hz.copied.next': '{auth} के लिए शिकायत का मसौदा कॉपी हुआ। अभी खुले पोर्टल में चिपकाएँ।',
       'seg.pins': 'नक्शे पर नंबर वाले पिन बताते हैं कि हर खतरे की फोटो लगभग कहाँ ली गई।',
       'tip.osm': 'OSM टैग से', 'tip.clear': 'कोई खतरा दर्ज नहीं',

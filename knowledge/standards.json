@@ -11,7 +11,8 @@
       "cost_per_unit_inr": 900,
       "unit": "sqm",
       "authority": "MCD",
-      "standard_ref": "IRC:103-2012 cl. 5.3 surface continuity"
+      "standard_ref": "IRC:103-2012 cl. 5.3 surface continuity",
+      "persistence": "structural"
     },
     {
       "id": "open_drain",
@@ -23,7 +24,8 @@
       "cost_per_unit_inr": 4500,
       "unit": "m",
       "authority": "DJB",
-      "standard_ref": "HG 2021 §3.2 no open drains within walkway"
+      "standard_ref": "HG 2021 §3.2 no open drains within walkway",
+      "persistence": "structural"
     },
     {
       "id": "missing_drain_cover",
@@ -35,7 +37,8 @@
       "cost_per_unit_inr": 3500,
       "unit": "each",
       "authority": "DJB",
-      "standard_ref": "IRC:103-2012 cl. 5.3 gratings flush, slots < 12 mm"
+      "standard_ref": "IRC:103-2012 cl. 5.3 gratings flush, slots < 12 mm",
+      "persistence": "structural"
     },
     {
       "id": "open_manhole",
@@ -47,7 +50,8 @@
       "cost_per_unit_inr": 6000,
       "unit": "each",
       "authority": "DJB",
-      "standard_ref": "HG 2021 §3.2 covers flush with surface"
+      "standard_ref": "HG 2021 §3.2 covers flush with surface",
+      "persistence": "structural"
     },
     {
       "id": "no_kerb_ramp",
@@ -59,7 +63,8 @@
       "cost_per_unit_inr": 12000,
       "unit": "each",
       "authority": "PWD",
-      "standard_ref": "HG 2021 §3.5 kerb ramps at every crossing, 1:12"
+      "standard_ref": "HG 2021 §3.5 kerb ramps at every crossing, 1:12",
+      "persistence": "structural"
     },
     {
       "id": "steep_ramp",
@@ -71,7 +76,8 @@
       "cost_per_unit_inr": 15000,
       "unit": "each",
       "authority": "PWD",
-      "standard_ref": "HG 2021 §3.4 max gradient 1:12, preferred 1:20"
+      "standard_ref": "HG 2021 §3.4 max gradient 1:12, preferred 1:20",
+      "persistence": "structural"
     },
     {
       "id": "high_kerb",
@@ -83,7 +89,8 @@
       "cost_per_unit_inr": 2500,
       "unit": "m",
       "authority": "PWD",
-      "standard_ref": "IRC:103-2012 cl. 5.4 kerb height 150 mm max"
+      "standard_ref": "IRC:103-2012 cl. 5.4 kerb height 150 mm max",
+      "persistence": "structural"
     },
     {
       "id": "obstructing_pole",
@@ -95,7 +102,8 @@
       "cost_per_unit_inr": 18000,
       "unit": "each",
       "authority": "DISCOM",
-      "standard_ref": "HG 2021 §3.1 obstruction-free clear width 1.8 m"
+      "standard_ref": "HG 2021 §3.1 obstruction-free clear width 1.8 m",
+      "persistence": "structural"
     },
     {
       "id": "transformer_on_path",
@@ -107,7 +115,8 @@
       "cost_per_unit_inr": 250000,
       "unit": "each",
       "authority": "DISCOM",
-      "standard_ref": "HG 2021 §3.1 utilities outside pedestrian zone"
+      "standard_ref": "HG 2021 §3.1 utilities outside pedestrian zone",
+      "persistence": "structural"
     },
     {
       "id": "parked_vehicle",
@@ -119,7 +128,8 @@
       "cost_per_unit_inr": 0,
       "unit": "enforcement",
       "authority": "Traffic Police",
-      "standard_ref": "MV Act s.122 / IRC:103 cl. 4 encroachment"
+      "standard_ref": "MV Act s.122 / IRC:103 cl. 4 encroachment",
+      "persistence": "temporary"
     },
     {
       "id": "vendor_encroachment",
@@ -131,7 +141,8 @@
       "cost_per_unit_inr": 0,
       "unit": "enforcement",
       "authority": "MCD",
-      "standard_ref": "Street Vendors Act 2014 vending zones; IRC:103 cl. 4"
+      "standard_ref": "Street Vendors Act 2014 vending zones; IRC:103 cl. 4",
+      "persistence": "temporary"
     },
     {
       "id": "construction_debris",
@@ -143,7 +154,8 @@
       "cost_per_unit_inr": 1500,
       "unit": "sqm",
       "authority": "MCD",
-      "standard_ref": "C&D Waste Rules 2016; HG 2021 §3.1"
+      "standard_ref": "C&D Waste Rules 2016; HG 2021 §3.1",
+      "persistence": "temporary"
     },
     {
       "id": "missing_tactile",
@@ -155,7 +167,8 @@
       "cost_per_unit_inr": 1800,
       "unit": "m",
       "authority": "PWD",
-      "standard_ref": "HG 2021 §3.6 tactile paving at crossings and hazards"
+      "standard_ref": "HG 2021 §3.6 tactile paving at crossings and hazards",
+      "persistence": "structural"
     },
     {
       "id": "standing_water",
@@ -167,7 +180,8 @@
       "cost_per_unit_inr": 1200,
       "unit": "sqm",
       "authority": "MCD",
-      "standard_ref": "IRC:103-2012 cl. 5.5 cross-fall 1:50 for drainage"
+      "standard_ref": "IRC:103-2012 cl. 5.5 cross-fall 1:50 for drainage",
+      "persistence": "temporary"
     },
     {
       "id": "uneven_level",
@@ -179,7 +193,8 @@
       "cost_per_unit_inr": 800,
       "unit": "sqm",
       "authority": "MCD",
-      "standard_ref": "HG 2021 §3.2 level change 6 mm plain, 12 mm bevelled"
+      "standard_ref": "HG 2021 §3.2 level change 6 mm plain, 12 mm bevelled",
+      "persistence": "structural"
     },
     {
       "id": "missing_streetlight",
@@ -191,7 +206,8 @@
       "cost_per_unit_inr": 22000,
       "unit": "each",
       "authority": "DISCOM",
-      "standard_ref": "IRC:103-2012 cl. 7 lighting 20 lux on footpaths"
+      "standard_ref": "IRC:103-2012 cl. 7 lighting 20 lux on footpaths",
+      "persistence": "structural"
     },
     {
       "id": "overgrown_vegetation",
@@ -203,7 +219,8 @@
       "cost_per_unit_inr": 400,
       "unit": "m",
       "authority": "MCD",
-      "standard_ref": "HG 2021 §3.1 headroom 2.2 m, clear width 1.8 m"
+      "standard_ref": "HG 2021 §3.1 headroom 2.2 m, clear width 1.8 m",
+      "persistence": "temporary"
     },
     {
       "id": "broken_railing",
@@ -215,7 +232,8 @@
       "cost_per_unit_inr": 2800,
       "unit": "m",
       "authority": "PWD",
-      "standard_ref": "HG 2021 §3.7 handrails 760–900 mm, continuous"
+      "standard_ref": "HG 2021 §3.7 handrails 760–900 mm, continuous",
+      "persistence": "structural"
     },
     {
       "id": "narrow_path",
@@ -227,7 +245,8 @@
       "cost_per_unit_inr": 6000,
       "unit": "m",
       "authority": "PWD",
-      "standard_ref": "IRC:103-2012 cl. 5.2 clear width 1.8 m minimum"
+      "standard_ref": "IRC:103-2012 cl. 5.2 clear width 1.8 m minimum",
+      "persistence": "structural"
     },
     {
       "id": "no_crossing",
@@ -239,7 +258,8 @@
       "cost_per_unit_inr": 45000,
       "unit": "each",
       "authority": "PWD",
-      "standard_ref": "IRC:103-2012 cl. 6 crossings at all junctions"
+      "standard_ref": "IRC:103-2012 cl. 6 crossings at all junctions",
+      "persistence": "structural"
     },
     {
       "id": "garbage_dump",
@@ -251,7 +271,8 @@
       "cost_per_unit_inr": 600,
       "unit": "sqm",
       "authority": "MCD",
-      "standard_ref": "SWM Rules 2016; IRC:103 cl. 4"
+      "standard_ref": "SWM Rules 2016; IRC:103 cl. 4",
+      "persistence": "temporary"
     },
     {
       "id": "no_footpath",
@@ -263,7 +284,8 @@
       "cost_per_unit_inr": 6000,
       "unit": "m",
       "authority": "PWD",
-      "standard_ref": "IRC:103-2012 cl. 5.1 footpaths on both sides of urban roads"
+      "standard_ref": "IRC:103-2012 cl. 5.1 footpaths on both sides of urban roads",
+      "persistence": "structural"
     },
     {
       "id": "steps_on_path",
@@ -275,7 +297,8 @@
       "cost_per_unit_inr": 25000,
       "unit": "each",
       "authority": "PWD",
-      "standard_ref": "HG 2021 §3.4 ramp wherever there is a level change"
+      "standard_ref": "HG 2021 §3.4 ramp wherever there is a level change",
+      "persistence": "structural"
     }
   ],
   "dimensional_standards": {
@@ -328,5 +351,9 @@
       "url": "https://pgms.delhi.gov.in/",
       "how": "Public Grievance Monitoring System: routes a complaint to any Delhi department and gives a tracking number. CPGRAMS (pgportal.gov.in) works for central agencies."
     }
+  },
+  "status_rules": {
+    "temporary_stale_after_hours": 24,
+    "note": "Temporary observations (vehicles, vendors, debris, water, waste, vegetation) are only trusted for 24 hours; after that they need rechecking, they are never cleared automatically. Structural barriers stay 'still present' until someone reports them cleared, ideally with a photo."
   }
 }

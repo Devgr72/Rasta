@@ -247,6 +247,37 @@
 
   const portalFor = (auth) => state.standards?.authority_portals?.[auth] || null;
 
+  function ago(min) {
+    if (min == null) return t('ago.unknown');
+    if (min < 1) return t('ago.now');
+    if (min < 60) return min === 1 ? t('ago.min1') : t('ago.min', { n: min });
+    const h = Math.round(min / 60);
+    if (h < 24) return h === 1 ? t('ago.hr1') : t('ago.hr', { n: h });
+    const d = Math.round(h / 24);
+    return d === 1 ? t('ago.day1') : t('ago.day', { n: d });
+  }
+  // Client-side fallback for hazards that arrive without a lifecycle (older API shapes).
+  function lifecycleOf(h) {
+    if (h.lifecycle) return h.lifecycle;
+    const type = state.types[h.type_id]; const temporary = type?.persistence === 'temporary';
+    const obs = h.observed_at ? Date.parse(h.observed_at) : NaN; const age = Number.isFinite(obs) ? Math.round((Date.now() - obs) / 60000) : null;
+    if (h.status === 'cleared') return { key: 'cleared', persistence: temporary ? 'temporary' : 'structural', age_min: h.status_at ? Math.round((Date.now() - Date.parse(h.status_at)) / 60000) : null };
+    if (temporary) return { key: age == null || age > 24 * 60 ? 'recheck' : h.status_at ? 'present' : 'observed', persistence: 'temporary', age_min: age };
+    return { key: 'present', persistence: 'structural', age_min: age };
+  }
+  function statusHtml(h) {
+    const lc = lifecycleOf(h); const when = ago(lc.age_min);
+    const long = lc.key === 'observed' ? t('st.observed.long', { ago: when }) : lc.key === 'cleared' ? t('st.cleared.long', { ago: when }) : lc.key === 'recheck' ? t('st.recheck.long', { ago: when }) : lc.persistence === 'temporary' ? t('st.present.long', { ago: when }) : t('st.present.struct');
+    const label = lc.key === 'observed' ? t('st.observed', { ago: when }) : t(`st.${lc.key}`);
+    return `<span class="hz-status ${lc.key}"><i></i>${label}</span><p class="hz-status-long">${long}</p>`;
+  }
+  async function updateHazardStatus(seg, h, status, photo) {
+    const body = { status };
+    if (photo) body.photo = await new Promise((r) => { const fr = new FileReader(); fr.onload = () => r(fr.result); fr.readAsDataURL(photo); });
+    const r = await api(`/api/hazards/${h.id}/status`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+    return r.segment;
+  }
+
   function complaintText(seg, h) {
     const t = state.types[h.type_id] || {};
     return `To: ${h.authority || t.authority || 'Municipal authority'}\nSubject: Footpath hazard — ${typeLabel(h.type_id)} at ${seg.name}\n\nLocation: ${fmtLL(seg.start)} to ${fmtLL(seg.end)}\nObservation: ${h.note || typeLabel(h.type_id)} (severity ${h.severity}/5)\nStandard: ${t.standard_ref || ''}\nIndicative repair cost: ${fmtINR(h.cost_inr)}\n\nThis hazard prevents safe use of the footpath by wheelchair users and senior citizens. Please inspect and rectify under the Harmonised Guidelines for Universal Accessibility (2021).\n\nReported via Rasta, ${new Date().toLocaleDateString('en-IN')}.`;
@@ -338,6 +369,23 @@
       row.innerHTML = `<span class="hz-sev ${h.severity >= 4 ? 'hi' : h.severity <= 2 ? 'lo' : ''}" aria-hidden="true">${h.severity}${chip}</span>
         <div><b>${esc(typeLabel(h.type_id))}<span class="hi-label">${esc(typeLabelHi(h.type_id))}</span></b><p>${esc(h.note || '')}</p><div class="auth">${esc(h.authority || '')} · ${esc(state.types[h.type_id]?.standard_ref || '')}</div><div class="hz-actions"><button type="button" class="hz-copy">${t('hz.copy')}</button>${portalFor(h.authority) ? `<a class="hz-submit" href="${esc(portalFor(h.authority).url)}" target="_blank" rel="noopener" title="${esc(portalFor(h.authority).how || '')}">${t('hz.submit', { auth: h.authority })}</a>` : ''}<a class="hz-submit" href="${esc(portalFor('_any')?.url || 'https://pgms.delhi.gov.in/')}" target="_blank" rel="noopener">${t('hz.submit.any')}</a></div></div>
         <span class="hz-cost">${h.cost_inr ? fmtINR(h.cost_inr) : t('hz.enforce')}</span>`;
+      // lifecycle: what to say about it today, and the recheck controls
+      const lc = lifecycleOf(h);
+      if (h.status === 'cleared') row.classList.add('is-cleared');
+      row.querySelector('.auth').insertAdjacentHTML('afterend', statusHtml(h) + `<div class="hz-recheck">${h.status === 'cleared' ? `<button type="button" data-st="present">${t('st.back')}</button>` : `<button type="button" data-st="present">${t('st.still')}</button><button type="button" class="clear" data-st="cleared">${t('st.clear')}</button>`}<button type="button" class="photo" title="${t('st.photo.hint')}">${t('st.photo')}</button><input type="file" accept="image/*" capture="environment" hidden></div>`);
+      const fileIn = row.querySelector('.hz-recheck input'); const photoBtn = row.querySelector('.hz-recheck .photo'); let pendingPhoto = null;
+      photoBtn.addEventListener('click', (e) => { e.stopPropagation(); fileIn.click(); });
+      fileIn.addEventListener('change', async () => { pendingPhoto = fileIn.files[0] ? await shrink(fileIn.files[0]) : null; photoBtn.classList.toggle('has', !!pendingPhoto); photoBtn.textContent = pendingPhoto ? '✓ ' + t('st.photo') : t('st.photo'); });
+      $$('.hz-recheck [data-st]', row).forEach((b) => b.addEventListener('click', async (e) => {
+        e.stopPropagation(); $$('.hz-recheck button', row).forEach((x) => { x.disabled = true; });
+        try {
+          const updated = await updateHazardStatus(seg, h, b.dataset.st, pendingPhoto);
+          toast(t(b.dataset.st === 'cleared' ? 'st.updated.cleared' : 'st.updated.present'), 'ok');
+          await loadSegments(); loadStats();
+          renderSegment(updated, host); M.select(updated.id);
+        } catch (err) { toast(t('st.failed', { err: err.message }), 'error'); $$('.hz-recheck button', row).forEach((x) => { x.disabled = false; }); }
+      }));
+      void lc;
       row.dataset.hazardId = h.id;
       const hot = (on) => { row.classList.toggle('is-hot', on); M.hotPin(h.id, on); const shot = shots.get(h.photo_id); shot?.querySelectorAll('.box').forEach((b) => { b.style.opacity = on ? (b.dataset.hazard == h.id ? 1 : .15) : ''; }); };
       row.addEventListener('mouseenter', () => hot(true)); row.addEventListener('mouseleave', () => hot(false));

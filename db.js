@@ -120,6 +120,19 @@ const MIGRATIONS = [
   ALTER TABLE photos ADD COLUMN source_url TEXT;
   ALTER TABLE photos ADD COLUMN source TEXT;
   `,
+  // 5 — hazard lifecycle: temporary observations age out, structural barriers stay until reported cleared
+  `
+  ALTER TABLE hazards ADD COLUMN status TEXT DEFAULT 'present';
+  ALTER TABLE hazards ADD COLUMN observed_at TEXT;
+  ALTER TABLE hazards ADD COLUMN status_at TEXT;
+  ALTER TABLE hazards ADD COLUMN status_note TEXT;
+  ALTER TABLE hazards ADD COLUMN status_photo_id INTEGER;
+  UPDATE hazards SET status = 'present' WHERE status IS NULL;
+  UPDATE hazards SET observed_at = COALESCE(
+    (SELECT p.taken_at FROM photos p WHERE p.id = hazards.photo_id),
+    (SELECT s.created_at FROM segments s WHERE s.id = hazards.segment_id)) WHERE observed_at IS NULL;
+  CREATE INDEX IF NOT EXISTS idx_hazards_status ON hazards(status);
+  `,
 ];
 
 function migrate(conn, migrations = MIGRATIONS) {
@@ -157,16 +170,21 @@ const q = {
     VALUES (@name, @start_lat, @start_lng, @end_lat, @end_lng, @length_m, @score, @walk_ok, @wheelchair_ok, @senior_ok,
      @walk_reason, @wheelchair_reason, @senior_reason, @clear_width_m, @surface_type, @total_cost_inr, @geometry,
      @min_lat, @min_lng, @max_lat, @max_lng, @source, @osm_id, @tags, @created_at)`),
-  segmentsInBbox: db.prepare(`SELECT s.*, (SELECT COUNT(*) FROM hazards h WHERE h.segment_id = s.id) AS hazard_count,
+  segmentsInBbox: db.prepare(`SELECT s.*, (SELECT COUNT(*) FROM hazards h WHERE h.segment_id = s.id AND COALESCE(h.status, 'present') != 'cleared') AS hazard_count,
     (SELECT COUNT(*) FROM photos p WHERE p.segment_id = s.id) AS photo_count FROM segments s
     WHERE s.max_lat >= @min_lat AND s.min_lat <= @max_lat AND s.max_lng >= @min_lng AND s.min_lng <= @max_lng ORDER BY s.id`),
   osmIds: db.prepare(`SELECT osm_id FROM segments WHERE osm_id IS NOT NULL`),
   insertPhoto: db.prepare(`INSERT INTO photos (segment_id, filename, hash, width_m, observations, status, photo_lat, photo_lng, taken_at, credit, license, source_url, source, created_at)
     VALUES (@segment_id, @filename, @hash, @width_m, @observations, @status, @photo_lat, @photo_lng, @taken_at, @credit, @license, @source_url, @source, @created_at)`),
   cachedResult: db.prepare(`SELECT result FROM vision_calls WHERE hash = ? AND result IS NOT NULL ORDER BY id DESC LIMIT 1`),
-  insertHazard: db.prepare(`INSERT INTO hazards (segment_id, photo_id, type_id, severity, note, bbox, cost_inr, authority)
-    VALUES (@segment_id, @photo_id, @type_id, @severity, @note, @bbox, @cost_inr, @authority)`),
-  allSegments: db.prepare(`SELECT s.*, (SELECT COUNT(*) FROM hazards h WHERE h.segment_id = s.id) AS hazard_count,
+  insertHazard: db.prepare(`INSERT INTO hazards (segment_id, photo_id, type_id, severity, note, bbox, cost_inr, authority, status, observed_at)
+    VALUES (@segment_id, @photo_id, @type_id, @severity, @note, @bbox, @cost_inr, @authority, 'present', @observed_at)`),
+  hazard: db.prepare(`SELECT * FROM hazards WHERE id = ?`),
+  setHazardStatus: db.prepare(`UPDATE hazards SET status = @status, status_at = @status_at, status_note = @status_note, status_photo_id = @status_photo_id,
+    observed_at = CASE WHEN @status = 'present' THEN @status_at ELSE observed_at END WHERE id = @id`),
+  updateGrade: db.prepare(`UPDATE segments SET score = @score, walk_ok = @walk_ok, wheelchair_ok = @wheelchair_ok, senior_ok = @senior_ok,
+    walk_reason = @walk_reason, wheelchair_reason = @wheelchair_reason, senior_reason = @senior_reason, total_cost_inr = @total_cost_inr WHERE id = @id`),
+  allSegments: db.prepare(`SELECT s.*, (SELECT COUNT(*) FROM hazards h WHERE h.segment_id = s.id AND COALESCE(h.status, 'present') != 'cleared') AS hazard_count,
     (SELECT COUNT(*) FROM photos p WHERE p.segment_id = s.id) AS photo_count FROM segments s ORDER BY s.id`),
   segment: db.prepare(`SELECT * FROM segments WHERE id = ?`),
   photosFor: db.prepare(`SELECT * FROM photos WHERE segment_id = ? ORDER BY id`),
@@ -176,7 +194,7 @@ const q = {
     (SELECT COUNT(*) FROM segments WHERE source = 'walk' OR source IS NULL) AS segments,
     (SELECT COUNT(*) FROM segments WHERE source = 'osm') AS open_data_segments,
     (SELECT COUNT(*) FROM photos WHERE filename IS NOT NULL) AS photos,
-    (SELECT COUNT(*) FROM hazards) AS hazards,
+    (SELECT COUNT(*) FROM hazards WHERE COALESCE(status, 'present') != 'cleared') AS hazards,
     (SELECT COALESCE(SUM(length_m), 0) FROM segments) AS metres,
     (SELECT COALESCE(AVG(score), 0) FROM segments) AS avg_score,
     (SELECT COALESCE(SUM(total_cost_inr), 0) FROM segments) AS total_cost_inr,
@@ -252,6 +270,7 @@ const saveSegment = db.transaction((graded, photos) => {
     const photoId = Number(pi.lastInsertRowid);
     for (const h of p.hazards || []) {
       q.insertHazard.run({
+        observed_at: p.taken_at || now(),
         segment_id: segmentId,
         photo_id: photoId,
         type_id: h.type_id,
@@ -357,8 +376,14 @@ function getSegment(id) {
     bbox: h.bbox ? JSON.parse(h.bbox) : null,
     cost_inr: h.cost_inr,
     authority: h.authority,
+    status: h.status || 'present',
+    observed_at: h.observed_at || null,
+    status_at: h.status_at || null,
+    status_note: h.status_note || null,
+    status_photo_id: h.status_photo_id || null,
   }));
-  return { ...rowToSegment({ ...row, hazard_count: hazards.length, photo_count: photos.length }), photos, hazards };
+  const active = hazards.filter((h) => h.status !== 'cleared').length;
+  return { ...rowToSegment({ ...row, hazard_count: active, photo_count: photos.length }), photos, hazards };
 }
 
 function allSegments() {
@@ -372,7 +397,7 @@ function segmentsInBbox(bbox) {
 
 // Up to three worst hazard types per segment, for tooltips: "what is damaged here".
 const topHazardsStmt = db.prepare(`SELECT segment_id, type_id, MAX(severity) AS severity, COUNT(*) AS n
-  FROM hazards GROUP BY segment_id, type_id ORDER BY segment_id, severity DESC, n DESC`);
+  FROM hazards WHERE COALESCE(status, 'present') != 'cleared' GROUP BY segment_id, type_id ORDER BY segment_id, severity DESC, n DESC`);
 function topHazardsBySegment() {
   const out = new Map();
   for (const r of topHazardsStmt.all()) {
@@ -462,10 +487,23 @@ const deleteSegment = db.transaction((id) => {
 });
 
 /** OSM way ids already imported, so an import never duplicates a way. */
+function getHazard(id) { return q.hazard.get(id) || null; }
+function setHazardStatus({ id, status, note, photo_id }) {
+  q.setHazardStatus.run({ id, status, status_at: now(), status_note: note || null, status_photo_id: photo_id || null });
+}
+/** Store a photo that supports a status change (a recheck), without hazards of its own. */
+function addRecheckPhoto(segmentId, { filename, hash, note }) {
+  const info = q.insertPhoto.run({ segment_id: segmentId, filename, hash, width_m: null, observations: note || 'Recheck photo', status: 'recheck', photo_lat: null, photo_lng: null, taken_at: now(), created_at: now(), credit: null, license: null, source_url: null, source: null });
+  return Number(info.lastInsertRowid);
+}
+function updateSegmentGrade(id, g) {
+  q.updateGrade.run({ id, score: g.score, walk_ok: g.verdicts.walk.ok ? 1 : 0, wheelchair_ok: g.verdicts.wheelchair.ok ? 1 : 0, senior_ok: g.verdicts.senior.ok ? 1 : 0,
+    walk_reason: g.verdicts.walk.reason, wheelchair_reason: g.verdicts.wheelchair.reason, senior_reason: g.verdicts.senior.reason, total_cost_inr: g.total_cost_inr });
+}
+
 function knownOsmIds() { return new Set(q.osmIds.all().map((r) => r.osm_id)); }
 
 module.exports = {
   db, migrate, MIGRATIONS, setUrlBuilder,
   saveSegment, getSegment, allSegments, segmentsInBbox, toGeoJSON, stats, isEmpty, deleteSegment, knownOsmIds,
-  recordVisionCall, cachedVisionResult, visionUsage,
-};
+  recordVisionCall, cachedVisionResult, visionUsage, getHazard, setHazardStatus, addRecheckPhoto, updateSegmentGrade };

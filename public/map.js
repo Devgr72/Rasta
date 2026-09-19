@@ -233,6 +233,7 @@
     const keys = [...byPhoto.keys()];
     let n = 0;
     seg.hazards.forEach((h, idx) => {
+      if (h.status === 'cleared') return; // reported cleared: nothing to point at
       const k = h.photo_id ?? 'none';
       const photo = photos.find((p) => p.id === h.photo_id);
       const group = byPhoto.get(k); const j = group.indexOf(h);
@@ -244,7 +245,7 @@
         const spread = group.length > 1 ? ((j / (group.length - 1)) - 0.5) * (0.6 / keys.length) : 0;
         ll = pointAlong(latlngs, base + spread);
       }
-      const cls = h.severity >= 4 ? 'hi' : h.severity <= 2 ? 'lo' : '';
+      const cls = h.lifecycle?.key === 'recheck' ? 'recheck' : h.severity >= 4 ? 'hi' : h.severity <= 2 ? 'lo' : '';
       const icon = L.divIcon({ className: '', html: `<div class="hz-pin ${cls}" style="--d:${(n++ * 0.06).toFixed(2)}s" title="${escapeHtml(labelFor(h.type_id))}">${idx + 1}</div>`, iconSize: [26, 26], iconAnchor: [13, 13] });
       const m = L.marker(ll, { icon, keyboard: false, zIndexOffset: 500 }).addTo(pinLayer);
       m.on('click', (e) => { L.DomEvent.stopPropagation(e); window.dispatchEvent(new CustomEvent('rasta:hazard-pin', { detail: { id: h.id, index: idx } })); });

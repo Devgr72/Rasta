@@ -314,6 +314,22 @@ restore also restores the cache.
 - Numbered pins along a selected footpath show roughly where each hazard was photographed (exactly,
   when the photo carried GPS). Hovering a footpath lists its worst hazards in the tooltip.
 
+## "Is this still here?"
+
+A parked scooter and a missing ramp do not have the same lifespan. Each hazard type in
+`knowledge/standards.json` is `temporary` (vehicles, vendors, debris, standing water, waste,
+vegetation) or `structural` (everything else), and every hazard row says what to believe today:
+
+- **Observed 25 minutes ago**: a temporary sighting inside the 24-hour trust window.
+- **Still present**: a structural barrier, or a temporary one re-confirmed on a recheck.
+- **Reported cleared**: someone reported it gone; it drops out of the score and the pins.
+- **Needs rechecking**: a temporary sighting older than a day. Stale, not cleared. Nothing is ever
+  cleared automatically.
+
+The buttons under each row ("Still here", "Cleared", "It's back") post to
+`POST /api/hazards/:id/status` with an optional photo, which is stored on the segment as a recheck.
+The segment is re-graded from the hazards that still count.
+
 ## Open data
 
 The map is not only what people photograph. **Add OpenStreetMap data for this area** (bottom left of

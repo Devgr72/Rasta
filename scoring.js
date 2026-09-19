@@ -364,7 +364,32 @@ function bestRouteFor(routes, persona) {
   return routes.slice().sort((a, b) => a.times[persona] - b.times[persona] || a.distance_m - b.distance_m)[0].index;
 }
 
+const STALE_MS = (STANDARDS.status_rules?.temporary_stale_after_hours || 24) * 3600 * 1000;
+const PERSISTENCE = Object.fromEntries(STANDARDS.hazard_types.map((h) => [h.id, h.persistence || 'structural']));
+
+/**
+ * What to say about a hazard today. A parked scooter and a missing ramp do not have the same
+ * lifespan: temporary observations go stale after a day and need rechecking; structural barriers
+ * stay present until someone reports them cleared. Nothing is ever cleared automatically.
+ * h: { type_id, status ('present'|'cleared'|null), observed_at, status_at }
+ */
+function hazardStatus(h, now = Date.now()) {
+  const persistence = PERSISTENCE[h.type_id] || 'structural';
+  const observed = h.observed_at ? Date.parse(h.observed_at) : NaN;
+  const statusAt = h.status_at ? Date.parse(h.status_at) : NaN;
+  const ageMs = Number.isFinite(observed) ? Math.max(0, now - observed) : null;
+  if (h.status === 'cleared') return { key: 'cleared', persistence, age_min: Number.isFinite(statusAt) ? Math.round((now - statusAt) / 60000) : null, counts: false };
+  if (persistence === 'temporary') {
+    if (ageMs == null || ageMs > STALE_MS) return { key: 'recheck', persistence, age_min: ageMs == null ? null : Math.round(ageMs / 60000), counts: true };
+    // re-confirmed by an explicit recheck → "still present"; a first sighting → "observed N ago"
+    if (Number.isFinite(statusAt)) return { key: 'present', persistence, age_min: Math.round(ageMs / 60000), counts: true };
+    return { key: 'observed', persistence, age_min: Math.round(ageMs / 60000), counts: true };
+  }
+  return { key: 'present', persistence, age_min: ageMs == null ? null : Math.round(ageMs / 60000), counts: true };
+}
+
 module.exports = {
+  hazardStatus, PERSISTENCE, STALE_MS,
   haversine, polylineLength, bboxOf, padBbox, pointToPolylineM, segmentCoords, distanceToLine,
   personaTimes, bestRouteFor, SPEED_MPS,
   enrichHazard, scoreFromHazards, personaVerdicts, gradeSegment, scoreRoute, tagsToObservation, TYPES, STANDARDS,

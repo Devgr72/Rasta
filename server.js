@@ -319,16 +319,75 @@ app.get('/api/segments', (_req, res) => {
   try { res.json(db.toGeoJSON()); } catch (err) { fail(res, 500, err.message); }
 });
 
+// Attach the lifecycle reading ("observed 25 min ago", "still present", "reported cleared",
+// "needs rechecking") to every hazard the panel shows.
+function withLifecycle(seg) {
+  if (!seg) return seg;
+  const now = Date.now();
+  return { ...seg, hazards: seg.hazards.map((h) => ({ ...h, lifecycle: scoring.hazardStatus(h, now) })) };
+}
+
+// The full segment as the panel needs it: lifecycle per hazard (observed / still present /
+// cleared / recheck) plus per-persona risk and crossing times.
+function segmentResponse(seg) {
+  const lc = withLifecycle(seg);
+  const hazards = lc.hazards.map((h) => {
+    const type = scoring.TYPES[h.type_id] || {};
+    return { ...h, risk: { walk: type.base_severity || 0, senior: type.senior_risk || 0, wheelchair: type.wheelchair_risk || 0 } };
+  });
+  const active = hazards.filter((h) => h.status !== 'cleared');
+  return { ...lc, hazards, times: scoring.personaTimes(seg.length_m || 0, active), free_time_min: Math.max(1, Math.round((seg.length_m || 0) / scoring.SPEED_MPS.walk / 60)) };
+}
+
+// Re-grade a segment from the hazards that still count (cleared ones drop out). Never automatic:
+// this only runs when a person reports a status change.
+function regrade(segmentId) {
+  const seg = db.getSegment(segmentId);
+  if (!seg) return null;
+  const active = seg.hazards.filter((h) => h.status !== 'cleared').map((h) => scoring.enrichHazard({ type_id: h.type_id, severity: h.severity, bbox: h.bbox, note: h.note })).filter(Boolean);
+  const score = scoring.scoreFromHazards(active, seg.clear_width_m);
+  const verdicts = scoring.personaVerdicts(active, seg.clear_width_m);
+  const total_cost_inr = active.reduce((sum, h) => sum + (h.cost_inr || 0), 0);
+  db.updateSegmentGrade(segmentId, { score, verdicts, total_cost_inr });
+  return db.getSegment(segmentId);
+}
+
+// POST /api/hazards/:id/status {status:'present'|'cleared', note?, photo?: dataURL}
+// "Still here" re-stamps observed_at; "Cleared" removes it from the score. A photo, if sent, is
+// stored on the segment as a recheck so the change has evidence.
+app.post('/api/hazards/:id/status', segmentLimiter, async (req, res) => {
+  const id = Number(req.params.id);
+  const h = db.getHazard(id);
+  if (!h) return fail(res, 404, 'hazard not found');
+  const status = req.body?.status;
+  if (!['present', 'cleared'].includes(status)) return fail(res, 400, "status must be 'present' or 'cleared'");
+  const note = String(req.body?.note || '').slice(0, 200) || null;
+  let photoId = null;
+  try {
+    const buf = dataUrlToBuffer(req.body?.photo);
+    if (buf) {
+      if (buf.length > MAX_FILE_MB * 1024 * 1024) return fail(res, 413, 'photo too large');
+      const hash = vision.sha256(buf);
+      const ext = extFor(buf);
+      const filename = `${hash.slice(0, 16)}.${ext}`;
+      await storage.put(filename, buf, `image/${ext === 'jpg' ? 'jpeg' : ext}`);
+      photoId = db.addRecheckPhoto(h.segment_id, { filename, hash, note: note || (status === 'cleared' ? 'Photo supporting: reported cleared' : 'Photo supporting: still present') });
+    }
+    db.setHazardStatus({ id, status, note, photo_id: photoId });
+    const seg = segmentResponse(regrade(h.segment_id));
+    req.log?.info?.({ hazard: id, status, photo: !!photoId, segment: h.segment_id, score: seg.score }, 'hazard status updated');
+    res.json({ ok: true, hazard: seg.hazards.find((x) => x.id === id), segment: seg });
+  } catch (err) {
+    console.error('[hazard-status] failed', err.message);
+    fail(res, 500, `could not update status: ${err.message}`);
+  }
+});
+
 app.get('/api/segments/:id', (req, res) => {
   try {
     const seg = db.getSegment(Number(req.params.id));
     if (!seg) return fail(res, 404, 'segment not found');
-    // per-persona view: how long each kind of walker needs, and how risky each hazard is for them
-    const hazards = seg.hazards.map((h) => {
-      const type = scoring.TYPES[h.type_id] || {};
-      return { ...h, risk: { walk: type.base_severity || 0, senior: type.senior_risk || 0, wheelchair: type.wheelchair_risk || 0 } };
-    });
-    res.json({ ...seg, hazards, times: scoring.personaTimes(seg.length_m || 0, hazards), free_time_min: Math.max(1, Math.round((seg.length_m || 0) / scoring.SPEED_MPS.walk / 60)) });
+    res.json(segmentResponse(seg));
   } catch (err) { fail(res, 500, err.message); }
 });
 
