@@ -78,6 +78,7 @@
     wheelchair: '<svg viewBox="0 0 24 24"><circle cx="9" cy="19" r="4"/><circle cx="12" cy="4" r="2"/><path d="M12 7v6h6l3 6M9 15h5"/></svg>',
     senior: '<svg viewBox="0 0 24 24"><circle cx="12" cy="4" r="2"/><path d="M12 7v7l-3 8M12 14l3 8M12 9l5 2M7 22V11"/></svg>',
   };
+  const PERSONAS = ['walk', 'wheelchair', 'senior'];
   const PERSONA_NAME = { get walk() { return t('persona.walk'); }, get wheelchair() { return t('persona.wheelchair'); }, get senior() { return t('persona.senior'); } };
 
   function verdictsHtml(verdicts) {
@@ -205,6 +206,7 @@
     state.lens = b.dataset.lens;
     $$('.lens-opt').forEach((x) => { const on = x === b; x.classList.toggle('is-active', on); x.setAttribute('aria-checked', on); x.setAttribute('tabindex', on ? '0' : '-1'); });
     M.setLens(state.lens); updateLensNote();
+    window.dispatchEvent(new CustomEvent('rasta:lens', { detail: state.lens }));
     $('#legend').hidden = state.lens !== 'score';
   }));
 
@@ -266,6 +268,16 @@
     });
     I.apply(tpl);
     el('verdicts').innerHTML = verdictsHtml(seg.verdicts);
+    const impactHost = el('impact');
+    let impactPersona = PERSONAS.includes(state.lens) ? state.lens : 'walk';
+    const renderImpact = () => renderImpactPanel(seg, impactPersona, impactHost, shots);
+    impactHost.addEventListener('click', (e) => {
+      const chip = e.target.closest('[data-impact]'); if (!chip) return;
+      impactPersona = chip.dataset.impact; renderImpact();
+      // the whole map recolours for this person too
+      const lensBtn = $(`.lens-opt[data-lens="${impactPersona}"]`); if (lensBtn && state.lens !== impactPersona) lensBtn.click();
+    });
+    window.addEventListener('rasta:lens', (e) => { if (PERSONAS.includes(e.detail) && e.detail !== impactPersona && impactHost.isConnected) { impactPersona = e.detail; renderImpact(); } });
     el('close').addEventListener('click', () => { M.clearSelection(); showEmpty(); if (isPhone()) setSheet(false); });
     el('report').href = `/report.html?id=${seg.id}`;
     el('walk').addEventListener('click', () => {
@@ -348,8 +360,45 @@
     host.innerHTML = ''; host.appendChild(tpl);
     M.showHazardPins(seg);
     // land boxes after paint
-    requestAnimationFrame(() => {
-      for (const [pid, shot] of shots) landBoxes(shot, seg.hazards.filter((h) => h.photo_id === pid), { stagger: 150 });
+    requestAnimationFrame(async () => {
+      await Promise.all([...shots].map(([pid, shot]) => landBoxes(shot, seg.hazards.filter((h) => h.photo_id === pid), { stagger: 150 })));
+      renderImpact();
+    });
+    renderImpact();
+  }
+
+  // ---------- who faces what: per-persona impact of a footpath ----------
+  const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
+  const riskOf = (h, p) => (h.risk && h.risk[p]) ?? ({ walk: state.types[h.type_id]?.base_severity, senior: state.types[h.type_id]?.senior_risk, wheelchair: state.types[h.type_id]?.wheelchair_risk }[p] || 0);
+  function consequence(h, p, seg) {
+    if (p === 'wheelchair' && h.type_id === 'no_kerb_ramp') return t('imp.kerb');
+    const r = riskOf(h, p);
+    return t(`imp.${p}.${Math.min(5, Math.max(1, r))}`);
+  }
+  function renderImpactPanel(seg, p, host, shots) {
+    const risky = seg.hazards.map((h) => ({ h, r: riskOf(h, p) })).filter((x) => x.r >= 2).sort((a, b) => b.r - a.r || b.h.severity - a.h.severity);
+    const v = seg.verdicts[p];
+    const times = seg.times || {}; const free = seg.free_time_min || Math.max(1, Math.round(seg.length_m / 1.35 / 60));
+    const mine = times[p]; const extra = mine != null ? Math.max(0, mine - free) : 0;
+    const narrow = p === 'wheelchair' && seg.clear_width_m != null && seg.clear_width_m < 1.2;
+    const chips = PERSONAS.map((k) => `<button type="button" class="imp-chip${k === p ? ' is-on' : ''}${seg.verdicts[k].ok ? '' : ' is-fail'}" data-impact="${k}" role="tab" aria-selected="${k === p}">${PERSONA_ICON[k]}<span>${PERSONA_NAME[k]}</span><small>${seg.verdicts[k].ok ? t('verdict.pass') : t('verdict.fail')}</small></button>`).join('');
+    const rows = risky.map(({ h, r }) => `<li class="imp-row r${r}" data-hz="${h.id}"><span class="risk">${r}<small>/5</small></span><div><b>${esc(typeLabel(h.type_id))}</b>${h.note ? `<span class="note"> — ${esc(h.note)}</span>` : ''}<p>${esc(consequence(h, p, seg))}</p></div></li>`).join('');
+    const matrix = seg.hazards.length ? `<details class="imp-matrix"><summary>${t('imp.compare')}</summary><table><thead><tr><th>${t('imp.hazard')}</th>${PERSONAS.map((k) => `<th title="${esc(PERSONA_NAME[k])}">${PERSONA_ICON[k]}</th>`).join('')}</tr></thead><tbody>${seg.hazards.map((h) => `<tr><td>${esc(typeLabel(h.type_id))}</td>${PERSONAS.map((k) => { const r = riskOf(h, k); return `<td><span class="cell r${r}">${r}</span></td>`; }).join('')}</tr>`).join('')}</tbody></table><p class="imp-legend">${t('imp.legend')}</p></details>` : '';
+    host.innerHTML = `
+      <div class="imp-chips" role="tablist" aria-label="${esc(t('imp.who'))}">${chips}</div>
+      <div class="imp-body ${v.ok ? 'pass' : 'fail'}">
+        <p class="imp-verdict"><b>${cap(t(v.ok ? 'imp.pass' : 'imp.fail', { persona: t(`r.persona.${p}`) }))}</b><span>${esc(v.reason)}</span></p>
+        <p class="imp-time">${mine != null ? t('imp.time', { n: mine, m: seg.length_m }) : ''}${extra ? ` <span class="extra">${t('imp.extra', { n: extra })}</span>` : ''}${narrow ? `<br><span class="extra">${t('imp.narrow', { w: seg.clear_width_m.toFixed(1) })}</span>` : ''}</p>
+        ${risky.length ? `<h3>${t('imp.face', { persona: t(`r.persona.${p}`) })}</h3><ul class="imp-list">${rows}</ul>` : `<p class="imp-none">${t('imp.none', { persona: t(`r.persona.${p}`) })}</p>`}
+      </div>
+      ${matrix}`;
+    // photos: boxes for hazards that matter to this person stay bright, the rest fade
+    for (const [, shot] of shots) shot.querySelectorAll('.box').forEach((b) => { const h = seg.hazards.find((x) => String(x.id) === b.dataset.hazard); const r = h ? riskOf(h, p) : 0; b.classList.toggle('is-off', r < 3); b.classList.toggle('is-key', r >= 4); });
+    // hovering a consequence row lights its box
+    $$('.imp-row', host).forEach((row) => {
+      const h = seg.hazards.find((x) => String(x.id) === row.dataset.hz); if (!h) return;
+      const hot = (on) => { const shot = shots.get(h.photo_id); shot?.querySelectorAll('.box').forEach((b) => { b.style.opacity = on ? (b.dataset.hazard == h.id ? 1 : .15) : ''; }); row.classList.toggle('is-hot', on); };
+      row.addEventListener('mouseenter', () => hot(true)); row.addEventListener('mouseleave', () => hot(false));
     });
   }
 
@@ -790,7 +839,6 @@
   }
   $('#btn-find-routes').addEventListener('click', findRoutes);
 
-  const PERSONAS = ['walk', 'wheelchair', 'senior'];
   function renderRoutes(data) {
     stopWalking();
     const host = $('#route-results'); host.innerHTML = '';

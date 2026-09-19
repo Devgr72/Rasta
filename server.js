@@ -323,7 +323,12 @@ app.get('/api/segments/:id', (req, res) => {
   try {
     const seg = db.getSegment(Number(req.params.id));
     if (!seg) return fail(res, 404, 'segment not found');
-    res.json(seg);
+    // per-persona view: how long each kind of walker needs, and how risky each hazard is for them
+    const hazards = seg.hazards.map((h) => {
+      const type = scoring.TYPES[h.type_id] || {};
+      return { ...h, risk: { walk: type.base_severity || 0, senior: type.senior_risk || 0, wheelchair: type.wheelchair_risk || 0 } };
+    });
+    res.json({ ...seg, hazards, times: scoring.personaTimes(seg.length_m || 0, hazards), free_time_min: Math.max(1, Math.round((seg.length_m || 0) / scoring.SPEED_MPS.walk / 60)) });
   } catch (err) { fail(res, 500, err.message); }
 });
 

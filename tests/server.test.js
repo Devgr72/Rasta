@@ -78,6 +78,11 @@ describe('GET endpoints', () => {
     assert.equal(j.id, 1);
     assert.ok(j.hazards.length > 0);
     assert.ok(j.verdicts.walk.reason);
+    // per-persona view for the "who faces what" panel
+    assert.deepEqual(Object.keys(j.hazards[0].risk).sort(), ['senior', 'walk', 'wheelchair']);
+    for (const k of ['walk', 'wheelchair', 'senior']) assert.ok(Number.isInteger(j.times[k]) && j.times[k] >= 1, `times.${k}`);
+    assert.ok(j.times.wheelchair >= j.times.walk && j.times.senior >= j.times.walk);
+    assert.ok(Number.isInteger(j.free_time_min) && j.free_time_min <= j.times.walk);
     const r404 = await fetch(base + '/api/segments/999999');
     assert.equal(r404.status, 404);
     assert.equal((await r404.json()).ok, false);
