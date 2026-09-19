@@ -15,10 +15,12 @@
   "type": "commonjs",
   "dependencies": {
     "@anthropic-ai/sdk": "^0.127.0",
+    "@maplibre/maplibre-gl-leaflet": "^0.1.4",
     "better-sqlite3": "^13.0.3",
     "dotenv": "^18.0.1",
     "express": "^5.2.1",
     "leaflet": "^1.9.4",
+    "maplibre-gl": "^4.7.1",
     "multer": "^2.4.0"
   },
   "devDependencies": {
