@@ -1,20 +1,31 @@
 {
   "name": "rasta",
-  "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "version": "0.1.0",
+  "description": "Crowdsourced footpath accessibility map. Walk a street with your phone, and the city gets a little more mapped.",
+  "main": "server.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "start": "node server.js",
+    "dev": "node --watch server.js",
+    "mock": "RASTA_MOCK_VISION=1 node server.js",
+    "test:vision": "node test-vision.js",
+    "eval": "node evals/run.js",
+    "shoot": "node scripts/shoot.js"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
+  "license": "MIT",
   "type": "commonjs",
   "dependencies": {
     "@anthropic-ai/sdk": "^0.127.0",
     "better-sqlite3": "^13.0.3",
     "dotenv": "^18.0.1",
     "express": "^5.2.1",
+    "leaflet": "^1.9.4",
     "multer": "^2.4.0"
+  },
+  "devDependencies": {
+    "puppeteer-core": "^25.11.0"
+  },
+  "private": true,
+  "engines": {
+    "node": ">=20"
   }
 }

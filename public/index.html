@@ -1,0 +1,243 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0F172A">
+<meta name="description" content="Rasta — walk a street with your phone and the city gets a little more mapped. A crowdsourced footpath accessibility map.">
+<title>Rasta — footpath accessibility map</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,300..900&family=Noto+Sans+Devanagari:wght@400;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/vendor/leaflet/leaflet.css">
+<link rel="stylesheet" href="/styles.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%230F172A'/%3E%3Cpath d='M7 24 L14 8 L18 18 L25 8' fill='none' stroke='%23F59E0B' stroke-width='3.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+</head>
+<body>
+<a class="skip" href="#panel">Skip to panel</a>
+
+<div id="map" role="application" aria-label="Footpath map"></div>
+
+<!-- top strip: the city's ledger -->
+<header class="ledger" id="ledger" aria-live="polite">
+  <div class="ledger-brand">
+    <svg viewBox="0 0 32 32" width="26" height="26" aria-hidden="true"><path d="M7 24 L14 8 L18 18 L25 8" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    <span>Rasta</span>
+  </div>
+  <dl class="ledger-figures">
+    <div><dt>footpaths walked</dt><dd data-stat="segments">0</dd></div>
+    <div><dt>hazards found</dt><dd data-stat="hazards">0</dd></div>
+    <div><dt>km covered</dt><dd data-stat="km_covered">0</dd></div>
+    <div><dt>to fix everything</dt><dd data-stat="total_cost_inr">₹0</dd></div>
+  </dl>
+  <div class="ledger-status" id="ledger-status" hidden></div>
+</header>
+
+<!-- tabs -->
+<nav class="tabs" role="tablist" aria-label="Sections">
+  <button class="tab is-active" role="tab" id="tab-map" aria-selected="true" aria-controls="view-map" data-tab="map">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6l6-2 6 2 6-2v14l-6 2-6-2-6 2z"/><path d="M9 4v14M15 6v14"/></svg>
+    <span>Map</span>
+  </button>
+  <button class="tab" role="tab" id="tab-contribute" aria-selected="false" aria-controls="view-contribute" data-tab="contribute">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg>
+    <span>Walk</span>
+  </button>
+  <button class="tab" role="tab" id="tab-route" aria-selected="false" aria-controls="view-route" data-tab="route">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="6" r="2.5"/><path d="M8 17c6 0 4-10 10-10"/></svg>
+    <span>Route</span>
+  </button>
+</nav>
+
+<!-- map-only controls -->
+<div class="map-tools" id="map-tools">
+  <div class="lens" role="radiogroup" aria-label="View the map as">
+    <button class="lens-opt is-active" role="radio" aria-checked="true" data-lens="score">Score</button>
+    <button class="lens-opt" role="radio" aria-checked="false" data-lens="walk">Walking</button>
+    <button class="lens-opt" role="radio" aria-checked="false" data-lens="wheelchair">Wheelchair</button>
+    <button class="lens-opt" role="radio" aria-checked="false" data-lens="senior">Senior</button>
+  </div>
+  <p class="lens-note" id="lens-note"></p>
+</div>
+
+<div class="map-buttons">
+  <button class="mapbtn" id="btn-locate" title="Find me" aria-label="Centre on my location">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M12 2v4M12 18v4M2 12h4M18 12h4"/><circle cx="12" cy="12" r="8"/></svg>
+  </button>
+  <button class="mapbtn" id="btn-fit" title="Show all footpaths" aria-label="Fit all footpaths in view">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg>
+  </button>
+</div>
+
+<div class="legend" id="legend" aria-hidden="true">
+  <span><i style="--c:#22C55E"></i>above 70</span>
+  <span><i style="--c:#F59E0B"></i>40 to 70</span>
+  <span><i style="--c:#DC2626"></i>under 40</span>
+</div>
+
+<!-- the panel: right sheet on desktop, bottom sheet on phones -->
+<aside class="panel" id="panel" aria-live="polite">
+  <div class="sheet-handle" id="sheet-handle" aria-hidden="true"><i></i></div>
+
+  <!-- MAP VIEW -->
+  <section class="view is-active" id="view-map" role="tabpanel" aria-labelledby="tab-map">
+    <div class="panel-scroll" id="segment-detail">
+      <div class="empty">
+        <h2>Tap a footpath.</h2>
+        <p>Every coloured line is a stretch someone walked and photographed. Tap one to see what they found, who can pass it, and what it would cost to fix.</p>
+        <p class="hint">Green passes. Amber slows people down. Red blocks a wheelchair or trips a senior.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- CONTRIBUTE VIEW -->
+  <section class="view" id="view-contribute" role="tabpanel" aria-labelledby="tab-contribute" hidden>
+    <div class="panel-scroll">
+      <form id="contribute-form" novalidate>
+        <div class="steps">
+          <div class="step" data-step="points">
+            <div class="step-head">
+              <span class="step-n">1</span>
+              <div>
+                <h2>Mark the stretch you walked</h2>
+                <p id="points-hint">Tap the map where you started, then where you stopped.</p>
+              </div>
+            </div>
+            <div class="points" id="points">
+              <div class="point"><b>A</b><span data-pt="a">start</span></div>
+              <div class="point"><b>B</b><span data-pt="b">end</span></div>
+              <span class="points-len" id="points-len"></span>
+              <button type="button" class="ghost" id="btn-clear-points">Clear</button>
+            </div>
+          </div>
+
+          <div class="step" data-step="name">
+            <div class="step-head">
+              <span class="step-n">2</span>
+              <div>
+                <h2>Name it the way a local would</h2>
+              </div>
+            </div>
+            <label class="field">
+              <input type="text" id="seg-name" name="name" maxlength="120" placeholder="Metro Gate 3 to the bus stop" autocomplete="off">
+            </label>
+          </div>
+
+          <div class="step" data-step="photos">
+            <div class="step-head">
+              <span class="step-n">3</span>
+              <div>
+                <h2>Add the photos</h2>
+                <p>Every 20 to 30 metres, pointing along the footpath. Phone photos are resized on your device before upload.</p>
+              </div>
+            </div>
+            <label class="dropzone" id="dropzone" for="photo-input" tabindex="0">
+              <input type="file" id="photo-input" accept="image/*" multiple capture="environment" hidden>
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg>
+              <span><strong>Take or choose photos</strong><small>up to 12 · JPG, PNG, HEIC converts on iPhone</small></span>
+            </label>
+            <div id="strip-home"><div class="strip" id="photo-strip"></div></div>
+          </div>
+        </div>
+
+        <div class="analyse-bar">
+          <button type="submit" class="primary" id="btn-analyse" disabled>
+            <span class="label">Analyse footpath</span>
+            <span class="count" id="analyse-count"></span>
+          </button>
+          <p class="analyse-note" id="analyse-note">Mark two points and add at least one photo.</p>
+        </div>
+      </form>
+
+      <!-- results -->
+      <div class="result" id="result" hidden>
+        <div class="result-top">
+          <p class="result-name" id="result-name"></p>
+          <div class="hazard-ticker"><output id="hazard-count">0</output><span>hazards</span></div>
+        </div>
+        <div class="dial-wrap">
+          <svg class="dial" viewBox="0 0 200 200" aria-hidden="true">
+            <path class="dial-track" d="M40 160 A85 85 0 1 1 160 160"/>
+            <path class="dial-arc" id="dial-arc" d="M40 160 A85 85 0 1 1 160 160"/>
+          </svg>
+          <div class="dial-num" id="dial-num" aria-live="off">0</div>
+          <div class="dial-cap" id="dial-cap">out of 100</div>
+        </div>
+        <div id="result-strip-slot"></div>
+        <ul class="verdicts" id="result-verdicts"></ul>
+        <div class="result-cost" id="result-cost"></div>
+        <div class="result-actions">
+          <button type="button" class="primary" id="btn-view-on-map">See it on the map</button>
+          <button type="button" class="ghost" id="btn-another">Walk another</button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ROUTE VIEW -->
+  <section class="view" id="view-route" role="tabpanel" aria-labelledby="tab-route" hidden>
+    <div class="panel-scroll">
+      <div class="steps">
+        <div class="step">
+          <div class="step-head">
+            <span class="step-n">1</span>
+            <div><h2>Where from, where to</h2><p id="route-hint">Tap the map for A, then B.</p></div>
+          </div>
+          <div class="points" id="route-points">
+            <div class="point"><b>A</b><span data-rpt="a">from</span></div>
+            <div class="point"><b>B</b><span data-rpt="b">to</span></div>
+            <button type="button" class="ghost" id="btn-route-demo">Use demo pair</button>
+            <button type="button" class="ghost" id="btn-route-clear">Clear</button>
+          </div>
+        </div>
+        <div class="step">
+          <div class="step-head">
+            <span class="step-n">2</span>
+            <div><h2>Who is walking</h2></div>
+          </div>
+          <div class="persona" role="radiogroup" aria-label="Persona">
+            <button type="button" class="persona-opt is-active" role="radio" aria-checked="true" data-persona="walk">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="13" cy="4" r="2"/><path d="M11 8l-3 6 3 2 1 6M11 8l4 3 3-1M11 8l-4 4"/></svg>Walking</button>
+            <button type="button" class="persona-opt" role="radio" aria-checked="false" data-persona="wheelchair">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="19" r="4"/><circle cx="12" cy="4" r="2"/><path d="M12 7v6h6l3 6M9 15h5"/></svg>Wheelchair</button>
+            <button type="button" class="persona-opt" role="radio" aria-checked="false" data-persona="senior">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="4" r="2"/><path d="M12 7v7l-3 8M12 14l3 8M12 9l5 2M7 22V11"/></svg>Senior</button>
+          </div>
+        </div>
+        <div class="analyse-bar">
+          <button type="button" class="primary" id="btn-find-routes" disabled><span class="label">Compare routes</span></button>
+          <p class="analyse-note" id="route-note">Pick two points first.</p>
+        </div>
+        <div id="route-results" class="routes"></div>
+      </div>
+    </div>
+  </section>
+</aside>
+
+<div class="toasts" id="toasts" aria-live="assertive"></div>
+
+<template id="tpl-segment">
+  <article class="seg">
+    <header class="seg-head">
+      <div class="seg-score" data-el="score"><span data-el="score-num">0</span></div>
+      <div>
+        <h2 data-el="name"></h2>
+        <p class="seg-meta" data-el="meta"></p>
+      </div>
+      <button class="close" data-el="close" aria-label="Close">×</button>
+    </header>
+    <ul class="verdicts" data-el="verdicts"></ul>
+    <div class="photos" data-el="photos"></div>
+    <div class="hazards" data-el="hazards"></div>
+    <div class="cost" data-el="cost"></div>
+    <div class="seg-actions">
+      <a class="ghost" data-el="report" target="_blank" rel="noopener">Open engineer's report</a>
+    </div>
+  </article>
+</template>
+
+<script src="/vendor/leaflet/leaflet.js"></script>
+<script src="/map.js"></script>
+<script src="/app.js"></script>
+</body>
+</html>

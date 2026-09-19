@@ -1,0 +1,7 @@
+{
+  "_note": "Loaded by ?demo=1. Drop the demo photos into public/demo/ and list their filenames here.",
+  "name": "Kashmere Gate Metro Gate 3 to Lothian Rd",
+  "start": { "lat": 28.6672, "lng": 77.2286 },
+  "end": { "lat": 28.6630, "lng": 77.2300 },
+  "photos": []
+}

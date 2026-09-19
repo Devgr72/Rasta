@@ -18,6 +18,7 @@ app.disable('x-powered-by');
 app.use(express.json({ limit: '25mb' }));
 app.use(express.static(path.join(__dirname, 'public'), { extensions: ['html'] }));
 app.use('/uploads', express.static(UPLOAD_DIR, { maxAge: '7d', immutable: true }));
+app.use('/vendor/leaflet', express.static(path.join(__dirname, 'node_modules', 'leaflet', 'dist'), { maxAge: '30d', immutable: true }));
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -148,16 +149,31 @@ app.post('/api/segments', upload.array('photos', 12), async (req, res) => {
 let demoRoute = null;
 try { demoRoute = require('./data/demo-route.json'); } catch { console.warn('[route] no data/demo-route.json'); }
 
+async function fetchProfile(profile, from, to, signal) {
+  const url = `${OSRM_BASE}/route/v1/${profile}/${from.lng},${from.lat};${to.lng},${to.lat}?alternatives=3&overview=full&geometries=geojson&steps=false`;
+  const r = await fetch(url, { signal, headers: { 'User-Agent': 'rasta-footpath-map/0.1' } });
+  if (!r.ok) throw new Error(`OSRM ${profile} ${r.status}`);
+  const json = await r.json();
+  if (json.code !== 'Ok' || !json.routes?.length) throw new Error(`OSRM ${profile} ${json.code || 'no routes'}`);
+  return json.routes;
+}
+
+// The public foot profile almost never returns alternatives, so we ask the
+// driving profile too and keep any route whose length differs by over 4%.
 async function fetchOSRM(from, to) {
-  const url = `${OSRM_BASE}/route/v1/foot/${from.lng},${from.lat};${to.lng},${to.lat}?alternatives=3&overview=full&geometries=geojson&steps=false`;
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), 3000);
   try {
-    const r = await fetch(url, { signal: ctrl.signal, headers: { 'User-Agent': 'rasta-footpath-map/0.1' } });
-    if (!r.ok) throw new Error(`OSRM ${r.status}`);
-    const json = await r.json();
-    if (json.code !== 'Ok' || !json.routes?.length) throw new Error(`OSRM ${json.code || 'no routes'}`);
-    return { json, source: 'osrm' };
+    const settled = await Promise.allSettled(['foot', 'driving'].map((p) => fetchProfile(p, from, to, ctrl.signal)));
+    const routes = [];
+    for (const s of settled) {
+      if (s.status !== 'fulfilled') { console.warn('[route]', s.reason.message); continue; }
+      for (const r of s.value) {
+        if (!routes.some((x) => Math.abs(x.distance - r.distance) / r.distance < 0.04)) routes.push(r);
+      }
+    }
+    if (!routes.length) throw new Error('OSRM returned no routes');
+    return { json: { code: 'Ok', routes: routes.slice(0, 4) }, source: 'osrm' };
   } finally { clearTimeout(timer); }
 }
 
