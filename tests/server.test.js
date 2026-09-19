@@ -87,10 +87,20 @@ describe('GET endpoints', () => {
     assert.equal(r.status, 404);
     assert.equal((await fetch(base + '/api/segments/1')).status, 200);
   });
-  test('static frontend and report page are served', async () => {
+  test('static frontend, report page, PWA manifest, service worker and i18n are served', async () => {
     assert.equal((await fetch(base + '/')).status, 200);
     assert.equal((await fetch(base + '/report.html?id=1')).status, 200);
     assert.equal((await fetch(base + '/vendor/leaflet/leaflet.js')).status, 200);
+    const man = await fetch(base + '/manifest.webmanifest');
+    assert.equal(man.status, 200); assert.match(man.headers.get('content-type'), /manifest\+json/);
+    assert.equal((await man.json()).short_name, 'Rasta');
+    const sw = await fetch(base + '/sw.js');
+    assert.equal(sw.status, 200); assert.match(sw.headers.get('content-type'), /javascript/);
+    assert.match(await sw.text(), /indexedDB/);
+    assert.equal((await fetch(base + '/i18n.js')).status, 200);
+    assert.equal((await fetch(base + '/icons/icon.svg')).status, 200);
+    const html = await (await fetch(base + '/')).text();
+    assert.match(html, /rel="manifest"/); assert.match(html, /id="btn-lang"/); assert.match(html, /id="sr-score"[^>]*aria-live="polite"/);
   });
 });
 

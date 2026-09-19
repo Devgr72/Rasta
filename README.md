@@ -303,3 +303,9 @@ lib/                 storage.js, osrm.js, exif.js, image-size.js, semaphore.js, 
 Dockerfile, docker-compose.yml, render.yaml, .github/workflows/ci.yml
 tests/               node:test suites
 ```
+
+## Field readiness (Phase 7)
+
+- **Installable and offline-tolerant.** `manifest.webmanifest` plus `public/sw.js`. The service worker caches the app shell and the last good copy of the read-only API, so the map opens with the last-loaded footpaths when there is no signal. A `POST /api/segments` made while offline is stored whole (multipart body and all) in IndexedDB and answered with a `queued` reply; the Contribute tab shows "N walks waiting to upload" with an *Upload now* button, and the queue replays automatically on `online`, via Background Sync where supported, and on the next app start. Tiles are never cached.
+- **English / Hindi.** The toggle in the ledger (top-right) switches every UI string via `public/i18n.js` (`data-i18n` attributes for static markup, `RastaI18n.t()` for dynamic text) and swaps hazard labels to `label_hi` from `standards.json`. The choice is remembered in `localStorage`; the first visit follows the browser language.
+- **Accessibility.** Tabs, the lens radio group and the persona radio group use a roving tabindex with Arrow/Home/End keys. Focus rings are a 3 px amber outline with a slate halo so they read on any background. The score dial has a visually-hidden `role="status"` live region that announces the final score and hazard count once (the animated numeral itself is `aria-hidden`); the hazard ticker and the step hints are `aria-live="polite"`. Text colours were re-checked against the slate backgrounds: the faint ink moved from `#64748B` (3.2:1) to `#8593AB` (4.9:1) and red *text* uses `#F87171` (5.5:1) while `#DC2626` stays for fills.

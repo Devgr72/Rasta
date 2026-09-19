@@ -1,6 +1,8 @@
 /* app.js — all frontend logic. Three tabs, show/hide only. */
 (function () {
   const M = window.RastaMap;
+  const I = window.RastaI18n;
+  const t = (k, v) => I.t(k, v);
   const $ = (sel, root = document) => root.querySelector(sel);
   const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
   const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -67,22 +69,54 @@
     });
   }
 
-  const typeLabel = (id) => state.types[id]?.label_en || id.replace(/_/g, ' ');
-  const typeLabelHi = (id) => state.types[id]?.label_hi || '';
+  // Hazard labels follow the UI language: Hindi first when the toggle is on, English as the secondary line.
+  const typeLabel = (id) => (I.lang === 'hi' ? state.types[id]?.label_hi : state.types[id]?.label_en) || state.types[id]?.label_en || id.replace(/_/g, ' ');
+  const typeLabelHi = (id) => (I.lang === 'hi' ? state.types[id]?.label_en : state.types[id]?.label_hi) || '';
 
   const PERSONA_ICON = {
     walk: '<svg viewBox="0 0 24 24"><circle cx="13" cy="4" r="2"/><path d="M11 8l-3 6 3 2 1 6M11 8l4 3 3-1M11 8l-4 4"/></svg>',
     wheelchair: '<svg viewBox="0 0 24 24"><circle cx="9" cy="19" r="4"/><circle cx="12" cy="4" r="2"/><path d="M12 7v6h6l3 6M9 15h5"/></svg>',
     senior: '<svg viewBox="0 0 24 24"><circle cx="12" cy="4" r="2"/><path d="M12 7v7l-3 8M12 14l3 8M12 9l5 2M7 22V11"/></svg>',
   };
-  const PERSONA_NAME = { walk: 'Walking', wheelchair: 'Wheelchair', senior: 'Senior' };
+  const PERSONA_NAME = { get walk() { return t('persona.walk'); }, get wheelchair() { return t('persona.wheelchair'); }, get senior() { return t('persona.senior'); } };
 
   function verdictsHtml(verdicts) {
     return ['walk', 'wheelchair', 'senior'].map((k) => {
       const v = verdicts[k];
-      return `<li class="${v.ok ? 'pass' : 'fail'}">${PERSONA_ICON[k]}<b>${PERSONA_NAME[k]}<small>${v.ok ? 'passes' : 'blocked'}</small></b><span>${esc(v.reason)}</span></li>`;
+      return `<li class="${v.ok ? 'pass' : 'fail'}">${PERSONA_ICON[k]}<b>${PERSONA_NAME[k]}<small>${v.ok ? t('verdict.pass') : t('verdict.fail')}</small></b><span>${esc(v.reason)}</span></li>`;
     }).join('');
   }
+
+  // ---------- language ----------
+  $('#btn-lang').addEventListener('click', () => I.setLang(I.lang === 'hi' ? 'en' : 'hi'));
+  I.onChange(() => {
+    if (state.tab === 'map' && !$('#segment-detail .seg')) showEmpty();
+    onSegPoints(state.segPoints); onRoutePoints(state.routePoints); updateAnalyseState(); updateGpsPlacer(); updateLensNote(); updateQueueBadge();
+    if (state.routes && state.tab === 'route') renderRoutes(state.routes);
+  });
+  I.apply();
+
+  // ---------- keyboard: arrow keys move through tabs and radio groups (roving tabindex) ----------
+  function rovingKeys(container, selector, activate) {
+    container.addEventListener('keydown', (e) => {
+      const items = $$(selector, container);
+      const i = items.indexOf(document.activeElement);
+      if (i < 0) return;
+      let n = null;
+      if (e.key === 'ArrowRight' || e.key === 'ArrowDown') n = (i + 1) % items.length;
+      else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') n = (i - 1 + items.length) % items.length;
+      else if (e.key === 'Home') n = 0;
+      else if (e.key === 'End') n = items.length - 1;
+      if (n == null) return;
+      e.preventDefault();
+      items.forEach((el, k) => el.setAttribute('tabindex', k === n ? '0' : '-1'));
+      items[n].focus();
+      activate(items[n]);
+    });
+  }
+  rovingKeys($('.tabs'), '.tab', (el) => setTab(el.dataset.tab));
+  rovingKeys($('.lens'), '.lens-opt', (el) => el.click());
+  rovingKeys($('.persona'), '.persona-opt', (el) => el.click());
 
   // Draw boxes onto a .shot element with a stagger. Returns when all landed.
   async function landBoxes(shot, hazards, { stagger = 150, onEach } = {}) {
@@ -104,7 +138,7 @@
   // ---------- tabs ----------
   function setTab(tab) {
     state.tab = tab;
-    $$('.tab').forEach((b) => { const on = b.dataset.tab === tab; b.classList.toggle('is-active', on); b.setAttribute('aria-selected', on); });
+    $$('.tab').forEach((b) => { const on = b.dataset.tab === tab; b.classList.toggle('is-active', on); b.setAttribute('aria-selected', on); b.setAttribute('tabindex', on ? '0' : '-1'); });
     $$('.view').forEach((v) => { const on = v.id === `view-${tab}`; v.classList.toggle('is-active', on); v.hidden = !on; });
     $('#map-tools').hidden = tab !== 'map';
     $('#legend').hidden = tab === 'contribute';
@@ -152,18 +186,18 @@
       set('km_covered', s.km_covered, (v) => v.toFixed(1));
       set('total_cost_inr', s.total_cost_inr, fmtINR);
       updateLensNote();
-    } catch (err) { toast(`Stats unavailable: ${err.message}`, 'error'); }
+    } catch (err) { toast(t('toast.stats', { err: err.message }), 'error'); }
   }
   function updateLensNote() {
     const el = $('#lens-note'); const s = state.stats; if (!s) return;
-    if (state.lens === 'score') el.innerHTML = `Coloured by accessibility score. Average across the city is <b>${s.avg_score}</b>.`;
-    else if (state.lens === 'wheelchair') el.innerHTML = `<b>${s.wheelchair_ok_count} of ${s.segments}</b> walked footpaths can be used in a wheelchair.`;
-    else if (state.lens === 'senior') el.innerHTML = `<b>${s.senior_ok_count} of ${s.segments}</b> walked footpaths are safe for an 80-year-old.`;
-    else { const ok = M.getFeatures().filter((f) => f.properties.verdicts.walk.ok).length; el.innerHTML = `<b>${ok} of ${s.segments}</b> footpaths are passable on foot without a detour.`; }
+    if (state.lens === 'score') el.innerHTML = t('lens.note.score', { avg: s.avg_score });
+    else if (state.lens === 'wheelchair') el.innerHTML = t('lens.note.wheelchair', { ok: s.wheelchair_ok_count, n: s.segments });
+    else if (state.lens === 'senior') el.innerHTML = t('lens.note.senior', { ok: s.senior_ok_count, n: s.segments });
+    else { const ok = M.getFeatures().filter((f) => f.properties.verdicts.walk.ok).length; el.innerHTML = t('lens.note.walk', { ok, n: s.segments }); }
   }
   $$('.lens-opt').forEach((b) => b.addEventListener('click', () => {
     state.lens = b.dataset.lens;
-    $$('.lens-opt').forEach((x) => { const on = x === b; x.classList.toggle('is-active', on); x.setAttribute('aria-checked', on); });
+    $$('.lens-opt').forEach((x) => { const on = x === b; x.classList.toggle('is-active', on); x.setAttribute('aria-checked', on); x.setAttribute('tabindex', on ? '0' : '-1'); });
     M.setLens(state.lens); updateLensNote();
     $('#legend').hidden = state.lens !== 'score';
   }));
@@ -173,26 +207,26 @@
       const gj = await api('/api/segments');
       M.renderSegments(gj);
       return gj;
-    } catch (err) { toast(`Could not load footpaths: ${err.message}`, 'error'); return null; }
+    } catch (err) { toast(t('toast.segments', { err: err.message }), 'error'); return null; }
   }
 
   // ---------- segment detail ----------
   M.setOnSelect(async (id) => {
     if (state.tab !== 'map') return;
     const host = $('#segment-detail');
-    host.innerHTML = '<div class="empty"><p>Loading…</p></div>';
+    host.innerHTML = `<div class="empty"><p>${t('seg.loading')}</p></div>`;
     if (isPhone()) setSheet(true);
     try {
       const seg = await api(`/api/segments/${id}`);
       renderSegment(seg, host);
     } catch (err) {
-      host.innerHTML = `<div class="empty"><h2>Couldn't load this footpath.</h2><p>${esc(err.message)}</p></div>`;
+      host.innerHTML = `<div class="empty"><h2>${t('seg.failed')}</h2><p>${esc(err.message)}</p></div>`;
     }
   });
   window.addEventListener('rasta:mapclick', () => { if (state.tab === 'map') showEmpty(); });
 
   function showEmpty() {
-    $('#segment-detail').innerHTML = `<div class="empty"><h2>Tap a footpath.</h2><p>Every coloured line is a stretch someone walked and photographed. Tap one to see what they found, who can pass it, and what it would cost to fix.</p><p class="hint">Green passes. Amber slows people down. Red blocks a wheelchair or trips a senior.</p></div>`;
+    $('#segment-detail').innerHTML = `<div class="empty"><h2>${t('empty.title')}</h2><p>${t('empty.body')}</p><p class="hint">${t('empty.hint')}</p></div>`;
   }
 
   function complaintText(seg, h) {
@@ -207,7 +241,13 @@
     el('score').classList.add(band);
     el('score-num').textContent = seg.score;
     el('name').textContent = seg.name;
-    el('meta').textContent = `${seg.length_m} m · ${seg.hazards.length} hazard${seg.hazards.length === 1 ? '' : 's'} · ${seg.photos.length} photo${seg.photos.length === 1 ? '' : 's'}${seg.clear_width_m != null ? ` · ${seg.clear_width_m.toFixed(1)} m clear` : ''}`;
+    el('meta').textContent = t('seg.meta', {
+      m: seg.length_m,
+      hazards: seg.hazards.length === 1 ? t('seg.hazard.one') : t('seg.hazard.many', { n: seg.hazards.length }),
+      photos: seg.photos.length === 1 ? t('seg.photo.one') : t('seg.photo.many', { n: seg.photos.length }),
+      width: seg.clear_width_m != null ? t('seg.width', { w: seg.clear_width_m.toFixed(1) }) : '',
+    });
+    I.apply(tpl);
     el('verdicts').innerHTML = verdictsHtml(seg.verdicts);
     el('close').addEventListener('click', () => { M.clearSelection(); showEmpty(); if (isPhone()) setSheet(false); });
     el('report').href = `/report.html?id=${seg.id}`;
@@ -216,7 +256,7 @@
     const photos = el('photos');
     const shots = new Map();
     if (!seg.photos.some((p) => p.url)) {
-      photos.innerHTML = `<div class="shot none">No photos on file for this stretch. Walk it again with the camera to add them.</div>`;
+      photos.innerHTML = `<div class="shot none">${t('seg.nophotos')}</div>`;
     }
     for (const p of seg.photos) {
       if (!p.url) continue;
@@ -230,20 +270,20 @@
 
     // hazards
     const hz = el('hazards');
-    if (!seg.hazards.length) hz.innerHTML = `<p class="analyse-note" style="text-align:left">No hazards recorded. This is what a footpath should look like.</p>`;
+    if (!seg.hazards.length) hz.innerHTML = `<p class="analyse-note" style="text-align:left">${t('seg.nohazards')}</p>`;
     for (const h of seg.hazards) {
       const row = document.createElement('div');
-      row.className = 'hz'; row.tabIndex = 0;
-      row.innerHTML = `<span class="hz-sev ${h.severity >= 4 ? 'hi' : h.severity <= 2 ? 'lo' : ''}">${h.severity}</span>
-        <div><b>${esc(typeLabel(h.type_id))}<span class="hi-label">${esc(typeLabelHi(h.type_id))}</span></b><p>${esc(h.note || '')}</p><div class="auth">${esc(h.authority || '')} · ${esc(state.types[h.type_id]?.standard_ref || '')}</div><button type="button" class="hz-copy">Copy complaint draft</button></div>
-        <span class="hz-cost">${h.cost_inr ? fmtINR(h.cost_inr) : 'enforce'}</span>`;
+      row.className = 'hz'; row.tabIndex = 0; row.setAttribute('role', 'group'); row.setAttribute('aria-label', `${typeLabel(h.type_id)}, ${h.severity}/5`);
+      row.innerHTML = `<span class="hz-sev ${h.severity >= 4 ? 'hi' : h.severity <= 2 ? 'lo' : ''}" aria-hidden="true">${h.severity}</span>
+        <div><b>${esc(typeLabel(h.type_id))}<span class="hi-label">${esc(typeLabelHi(h.type_id))}</span></b><p>${esc(h.note || '')}</p><div class="auth">${esc(h.authority || '')} · ${esc(state.types[h.type_id]?.standard_ref || '')}</div><button type="button" class="hz-copy">${t('hz.copy')}</button></div>
+        <span class="hz-cost">${h.cost_inr ? fmtINR(h.cost_inr) : t('hz.enforce')}</span>`;
       const hot = (on) => { row.classList.toggle('is-hot', on); const shot = shots.get(h.photo_id); shot?.querySelectorAll('.box').forEach((b) => { b.style.opacity = on ? (b.dataset.hazard == h.id ? 1 : .15) : ''; }); };
       row.addEventListener('mouseenter', () => hot(true)); row.addEventListener('mouseleave', () => hot(false));
       row.addEventListener('focus', () => hot(true)); row.addEventListener('blur', () => hot(false));
       row.querySelector('.hz-copy').addEventListener('click', async (e) => {
         e.stopPropagation();
-        try { await navigator.clipboard.writeText(complaintText(seg, h)); toast(`Complaint draft for ${h.authority || 'the authority'} copied`, 'ok'); }
-        catch { toast('Clipboard blocked by the browser', 'error'); }
+        try { await navigator.clipboard.writeText(complaintText(seg, h)); toast(t('hz.copied', { auth: h.authority || t('hz.authority') }), 'ok'); }
+        catch { toast(t('hz.clipboard'), 'error'); }
       });
       hz.appendChild(row);
     }
@@ -251,8 +291,8 @@
     // cost
     const byAuth = {};
     for (const h of seg.hazards) if (h.cost_inr) byAuth[h.authority || 'Other'] = (byAuth[h.authority || 'Other'] || 0) + h.cost_inr;
-    el('cost').innerHTML = `<div class="cost-total"><span>To fix this stretch</span><b>${fmtINR(seg.total_cost_inr)}</b></div>
-      <div class="cost-rows">${Object.entries(byAuth).sort((a, b) => b[1] - a[1]).map(([a, c]) => `<span>${esc(a)}<br><small style="color:var(--ink-faint)">${esc(state.standards?.authorities?.[a] || '')}</small></span><span>${fmtINR(c)}</span>`).join('') || '<span>No repair cost — enforcement only</span><span></span>'}</div>`;
+    el('cost').innerHTML = `<div class="cost-total"><span>${t('cost.total')}</span><b>${fmtINR(seg.total_cost_inr)}</b></div>
+      <div class="cost-rows">${Object.entries(byAuth).sort((a, b) => b[1] - a[1]).map(([a, c]) => `<span>${esc(a)}<br><small style="color:var(--ink-faint)">${esc(state.standards?.authorities?.[a] || '')}</small></span><span>${fmtINR(c)}</span>`).join('') || `<span>${t('cost.none')}</span><span></span>`}</div>`;
 
     host.innerHTML = ''; host.appendChild(tpl);
     // land boxes after paint
@@ -265,9 +305,9 @@
   const ptEls = { a: $('[data-pt="a"]'), b: $('[data-pt="b"]') };
   function onSegPoints(points) {
     state.segPoints = points;
-    ['a', 'b'].forEach((k, i) => { const p = points[i]; ptEls[k].textContent = p ? fmtLL(p) : (i ? 'end' : 'start'); ptEls[k].parentElement.classList.toggle('is-set', !!p); });
-    $('#points-len').innerHTML = points.length === 2 ? `<b>${Math.round(haversine(points[0], points[1]))} m</b> stretch` : '';
-    $('#points-hint').textContent = points.length === 0 ? 'Tap the map where you started, then where you stopped.' : points.length === 1 ? 'Now tap where you stopped.' : 'Drag the markers to adjust.';
+    ['a', 'b'].forEach((k, i) => { const p = points[i]; ptEls[k].textContent = p ? fmtLL(p) : (i ? t('c.end') : t('c.start')); ptEls[k].parentElement.classList.toggle('is-set', !!p); });
+    $('#points-len').innerHTML = points.length === 2 ? t('c.len', { m: Math.round(haversine(points[0], points[1])) }) : '';
+    $('#points-hint').textContent = points.length === 0 ? t('c.hint0') : points.length === 1 ? t('c.hint1') : t('c.hint2');
     $('[data-step="points"]').classList.toggle('is-done', points.length === 2);
     updateAnalyseState();
   }
@@ -277,14 +317,14 @@
   function updateAnalyseState() {
     const ok = state.segPoints.length === 2 && state.photos.length > 0 && !state.analysing;
     $('#btn-analyse').disabled = !ok;
-    $('#analyse-count').textContent = state.photos.length ? `${state.photos.length} photo${state.photos.length > 1 ? 's' : ''}` : '';
+    $('#analyse-count').textContent = state.photos.length ? (state.photos.length === 1 ? t('c.count.one') : t('c.count.many', { n: state.photos.length })) : '';
     const note = $('#analyse-note');
     note.classList.remove('is-error');
-    if (state.analysing) note.textContent = 'Analysing in parallel…';
-    else if (state.segPoints.length < 2 && !state.photos.length) note.textContent = 'Mark two points and add at least one photo.';
-    else if (state.segPoints.length < 2) note.textContent = 'Mark where the stretch starts and ends.';
-    else if (!state.photos.length) note.textContent = 'Add at least one photo.';
-    else note.textContent = `One model call per photo, all at once. Cached photos come back instantly.`;
+    if (state.analysing) note.textContent = t('c.note.analysing');
+    else if (state.segPoints.length < 2 && !state.photos.length) note.textContent = t('c.note.both');
+    else if (state.segPoints.length < 2) note.textContent = t('c.note.points');
+    else if (!state.photos.length) note.textContent = t('c.note.photos');
+    else note.textContent = t('c.note.ready');
     $('[data-step="photos"]').classList.toggle('is-done', state.photos.length > 0);
   }
 
@@ -324,7 +364,7 @@
     const n = state.photos.filter((p) => p.meta && p.meta.lat != null).length;
     const b = $('#btn-place-gps');
     b.hidden = n === 0;
-    b.textContent = n === 1 ? 'Place start from photo GPS' : `Place from photo GPS (${n} photos)`;
+    b.textContent = n === 1 ? t('c.gps.one') : t('c.gps.many', { n });
   }
 
   async function addFiles(files) {
@@ -356,7 +396,7 @@
     if (sorted.length > 1 && haversine(a, b) > 5) pts.push({ lat: b.lat, lng: b.lng });
     M.setPicks(pts);
     M.map.flyToBounds(L.latLngBounds(pts.map((p) => [p.lat, p.lng])).pad(0.6), { maxZoom: 17, duration: 0.8 });
-    toast(pts.length === 2 ? `Placed from ${sorted.length} geotagged photos. Drag the markers if the GPS was off.` : 'Start placed from the photo. Tap the map where you stopped.', 'ok');
+    toast(pts.length === 2 ? t('c.gps.placed', { n: sorted.length }) : t('c.gps.start'), 'ok');
   });
   $('#photo-input').addEventListener('change', (e) => { addFiles(e.target.files); e.target.value = ''; });
   const dz = $('#dropzone');
@@ -389,9 +429,9 @@
     const ticker = $('#hazard-count'); ticker.textContent = '0'; let found = 0;
     // results view shows immediately so the ticker is visible while boxes land
     $('#result').hidden = false;
-    $('#result-name').textContent = $('#seg-name').value.trim() || 'Unnamed footpath';
+    $('#result-name').textContent = $('#seg-name').value.trim() || t('c.unnamed');
     $('#result-verdicts').innerHTML = ''; $('#result-cost').innerHTML = ''; $('.result-actions').style.visibility = 'hidden';
-    $('#dial-num').textContent = '0'; $('#dial-num').dataset.v = 0; $('#dial-arc').style.strokeDashoffset = 400; $('#dial-cap').textContent = 'analysing';
+    $('#dial-num').textContent = '0'; $('#dial-num').dataset.v = 0; $('#dial-arc').style.strokeDashoffset = 400; $('#dial-cap').textContent = t('c.dial.analysing'); $('#sr-score').textContent = '';
 
     const fd = new FormData();
     fd.append('name', $('#seg-name').value.trim());
@@ -416,26 +456,36 @@
           const line = buf.slice(0, nl).trim(); buf = buf.slice(nl + 1);
           if (!line) continue;
           let msg; try { msg = JSON.parse(line); } catch { continue; }
+          if (msg.type === 'queued') {
+            // The service worker stored the request because we are offline. Nothing was analysed yet.
+            $$('#photo-strip .shot').forEach((s) => { s.classList.remove('is-scanning'); s.classList.add('is-queued'); });
+            $('#result').hidden = true; $('#contribute-form').hidden = false;
+            toast(t('c.queued'), 'ok');
+            updateQueueBadge();
+            resetContribute();
+            return;
+          }
           if (msg.type === 'photo') {
             const p = msg.photo; const shot = $$('#photo-strip .shot')[p.index];
             if (!shot) continue;
             shot.classList.remove('is-scanning');
             if (p.status === 'failed') {
-              shot.classList.add('is-failed'); shot.insertAdjacentHTML('beforeend', `<span class="fail">Couldn't analyse: ${esc(p.error || 'unknown')}</span>`);
-              if (/daily budget/i.test(p.error || '') && !budgetToasted) { budgetToasted = true; toast("Today's analysis budget is used up. Photos were saved without hazards — try again tomorrow.", 'error'); }
+              shot.classList.add('is-failed'); shot.insertAdjacentHTML('beforeend', `<span class="fail">${esc(t('c.failed.photo', { err: p.error || 'unknown' }))}</span>`);
+              if (/daily budget/i.test(p.error || '') && !budgetToasted) { budgetToasted = true; toast(t('c.budget'), 'error'); }
             }
-            if (p.status === 'mock') shot.insertAdjacentHTML('beforeend', '<span class="badge mock">mock — no API key</span>');
-            else if (p.cached) shot.insertAdjacentHTML('beforeend', '<span class="badge">cached</span>');
+            if (p.status === 'mock') shot.insertAdjacentHTML('beforeend', `<span class="badge mock">${t('c.mock')}</span>`);
+            else if (p.cached) shot.insertAdjacentHTML('beforeend', `<span class="badge">${t('c.cached')}</span>`);
             landing.push(landBoxes(shot, p.hazards, { stagger: 150, onEach: () => { found++; ticker.textContent = found; ticker.classList.add('tick'); setTimeout(() => ticker.classList.remove('tick'), 200); } }));
           } else if (msg.type === 'segment') segment = msg.segment;
           else if (msg.type === 'error') throw new Error(msg.error);
         }
       }
-      if (!segment) throw new Error('No result came back');
+      if (!segment) throw new Error(t('c.noresult'));
       await Promise.all(landing);
       state.lastSegmentId = segment.id;
       // the reveal
-      $('#dial-cap').textContent = 'out of 100';
+      $('#dial-cap').textContent = t('c.dial.cap');
+      $('#sr-score').textContent = t('sr.score', { score: segment.score, hazards: segment.hazards.length });
       const arc = $('#dial-arc');
       arc.style.stroke = M.scoreColor(segment.score);
       arc.style.transition = reduceMotion ? 'none' : 'stroke-dashoffset 1.1s cubic-bezier(.2,.8,.2,1), stroke .3s';
@@ -443,17 +493,18 @@
       await countUp($('#dial-num'), segment.score, { ms: 1100 });
       $('#result-verdicts').innerHTML = verdictsHtml(segment.verdicts);
       const byAuth = Object.entries(segment.cost_by_authority || {}).filter(([, c]) => c > 0).sort((a, b) => b[1] - a[1]);
-      $('#result-cost').innerHTML = `<div class="cost-total"><span>To fix this stretch</span><b>${fmtINR(segment.total_cost_inr)}</b></div><div class="cost-rows">${byAuth.map(([a, c]) => `<span>${esc(a)}</span><span>${fmtINR(c)}</span>`).join('') || '<span>No repair cost</span><span></span>'}</div>`;
+      $('#result-cost').innerHTML = `<div class="cost-total"><span>${t('cost.total')}</span><b>${fmtINR(segment.total_cost_inr)}</b></div><div class="cost-rows">${byAuth.map(([a, c]) => `<span>${esc(a)}</span><span>${fmtINR(c)}</span>`).join('') || `<span>${t('cost.none.short')}</span><span></span>`}</div>`;
       $('.result-actions').style.visibility = '';
       $('#contribute-form').hidden = true;
       $('#result-strip-slot').appendChild(strip); // photos with their boxes stay in view
       await loadSegments(); loadStats();
-      toast(`Added "${segment.name}" to the map`, 'ok');
+      toast(t('c.added', { name: segment.name }), 'ok');
     } catch (err) {
+      if (state.analysing === false) return; // already handled (queued offline)
       $$('#photo-strip .shot').forEach((s) => { s.classList.remove('is-scanning'); s.querySelector('.rm').hidden = false; });
       $('#result').hidden = true;
-      const note = $('#analyse-note'); note.textContent = `Analysis failed: ${err.message}. Nothing was saved — try again.`; note.classList.add('is-error');
-      toast(`Analysis failed: ${err.message}`, 'error');
+      const note = $('#analyse-note'); note.textContent = t('c.failed.note', { err: err.message }); note.classList.add('is-error');
+      toast(t('c.failed', { err: err.message }), 'error');
     } finally {
       state.analysing = false; btn.classList.remove('is-busy');
       if (!$('#result').hidden) { /* keep disabled state until reset */ } else updateAnalyseState();
@@ -483,31 +534,31 @@
   const rptEls = { a: $('[data-rpt="a"]'), b: $('[data-rpt="b"]') };
   function onRoutePoints(points) {
     state.routePoints = points;
-    ['a', 'b'].forEach((k, i) => { const p = points[i]; rptEls[k].textContent = p ? fmtLL(p) : (i ? 'to' : 'from'); rptEls[k].parentElement.classList.toggle('is-set', !!p); });
-    $('#route-hint').textContent = points.length === 0 ? 'Tap the map for A, then B.' : points.length === 1 ? 'Now tap the destination.' : 'Drag the markers to adjust.';
+    ['a', 'b'].forEach((k, i) => { const p = points[i]; rptEls[k].textContent = p ? fmtLL(p) : (i ? t('r.to') : t('r.from')); rptEls[k].parentElement.classList.toggle('is-set', !!p); });
+    $('#route-hint').textContent = points.length === 0 ? t('r.hint0') : points.length === 1 ? t('r.hint1') : t('r.hint2');
     $('#btn-find-routes').disabled = points.length !== 2;
-    $('#route-note').textContent = points.length === 2 ? `${(haversine(points[0], points[1]) / 1000).toFixed(1)} km apart as the crow flies` : 'Pick two points first.';
+    $('#route-note').textContent = points.length === 2 ? t('r.note.apart', { km: (haversine(points[0], points[1]) / 1000).toFixed(1) }) : t('r.note.pick');
   }
   $('#btn-route-clear').addEventListener('click', () => { M.clearPicks(); onRoutePoints([]); M.clearRoutes(); $('#route-results').innerHTML = ''; state.routes = null; });
   $('#btn-route-demo').addEventListener('click', () => { M.setPicks([{ lat: 28.6672, lng: 77.2286 }, { lat: 28.6598, lng: 77.2288 }]); M.map.flyTo([28.6635, 77.2290], 15); });
   $$('.persona-opt').forEach((b) => b.addEventListener('click', () => {
     state.persona = b.dataset.persona;
-    $$('.persona-opt').forEach((x) => { const on = x === b; x.classList.toggle('is-active', on); x.setAttribute('aria-checked', on); });
+    $$('.persona-opt').forEach((x) => { const on = x === b; x.classList.toggle('is-active', on); x.setAttribute('aria-checked', on); x.setAttribute('tabindex', on ? '0' : '-1'); });
     if (state.routes && state.routePoints.length === 2) findRoutes();
   }));
 
   async function findRoutes() {
     if (state.routePoints.length !== 2) return;
     const btn = $('#btn-find-routes'); btn.disabled = true; btn.classList.add('is-busy');
-    $('#route-note').textContent = 'Asking the routing server…';
+    $('#route-note').textContent = t('r.note.asking');
     try {
       const data = await api('/api/route', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ from: state.routePoints[0], to: state.routePoints[1], persona: state.persona }) });
       state.routes = data;
       renderRoutes(data);
-      $('#route-note').textContent = `${data.routes.length} route${data.routes.length === 1 ? '' : 's'} compared for a ${PERSONA_NAME[state.persona].toLowerCase()} ${state.persona === 'walk' ? 'person' : 'user'}.`;
+      $('#route-note').textContent = t('r.note.done', { n: data.routes.length, persona: t(`r.persona.${state.persona}`) });
     } catch (err) {
-      $('#route-note').textContent = `Routing failed: ${err.message}`; $('#route-note').classList.add('is-error');
-      toast(`Routing failed: ${err.message}`, 'error');
+      $('#route-note').textContent = t('r.failed', { err: err.message }); $('#route-note').classList.add('is-error');
+      toast(t('r.failed', { err: err.message }), 'error');
     } finally { btn.disabled = false; btn.classList.remove('is-busy'); }
   }
   $('#btn-find-routes').addEventListener('click', findRoutes);
@@ -521,13 +572,13 @@
       const covered = r.coverage >= 40 && r.score != null;
       const card = document.createElement('button');
       card.type = 'button'; card.className = `rc${r.index === data.recommended_index ? ' is-rec' : ''}`; card.dataset.index = r.index;
-      card.innerHTML = `<div class="rc-score${covered ? '' : ' nodata'}" style="--c:${M.scoreColor(covered ? r.score : null)}">${covered ? r.score : 'no<br>data'}</div>
+      card.innerHTML = `<div class="rc-score${covered ? '' : ' nodata'}" style="--c:${M.scoreColor(covered ? r.score : null)}">${covered ? r.score : t('r.nodata')}</div>
         <div>
-          <div class="rc-head"><b>${data.routes.length === 1 ? 'Only route found' : r.index === data.recommended_index ? 'Recommended' : `Route ${r.index + 1}`}</b>${r.index === data.recommended_index && covered && data.routes.length > 1 ? '<span class="rc-rec">best with data</span>' : ''}</div>
-          <div class="rc-meta">${(r.distance_m / 1000).toFixed(1)} km · ${r.duration_min} min · ${r.coverage}% of the way has been walked</div>
-          <div class="rc-cov"><i style="--w:${r.coverage}%"></i></div>
-          ${r.worst_hazard ? `<div class="rc-worst">Worst on the way: <b>${esc(r.worst_hazard.label_en || r.worst_hazard.type_id)}</b> (${r.worst_hazard.severity}/5) on ${esc(r.worst_hazard.segment_name)}</div>` : covered ? '<div class="rc-worst">No hazards recorded on the covered stretches</div>' : '<div class="rc-worst">Too little of this route has been walked to score it</div>'}
-          ${r.persona_blockers.length ? `<div class="rc-block">Blocked for ${PERSONA_NAME[state.persona].toLowerCase()}: ${esc(r.persona_blockers[0].name)}${r.persona_blockers.length > 1 ? ` and ${r.persona_blockers.length - 1} more` : ''}</div>` : ''}
+          <div class="rc-head"><b>${data.routes.length === 1 ? t('r.only') : r.index === data.recommended_index ? t('r.rec') : t('r.n', { n: r.index + 1 })}</b>${r.index === data.recommended_index && covered && data.routes.length > 1 ? `<span class="rc-rec">${t('r.best')}</span>` : ''}</div>
+          <div class="rc-meta">${t('r.meta', { km: (r.distance_m / 1000).toFixed(1), min: r.duration_min, cov: r.coverage })}</div>
+          <div class="rc-cov" role="img" aria-label="${r.coverage}%"><i style="--w:${r.coverage}%"></i></div>
+          ${r.worst_hazard ? `<div class="rc-worst">${t('r.worst', { label: esc(typeLabel(r.worst_hazard.type_id) || r.worst_hazard.label_en), sev: r.worst_hazard.severity, seg: esc(r.worst_hazard.segment_name) })}</div>` : covered ? `<div class="rc-worst">${t('r.clean')}</div>` : `<div class="rc-worst">${t('r.toolittle')}</div>`}
+          ${r.persona_blockers.length ? `<div class="rc-block">${t('r.blocked', { persona: t(`r.persona.${state.persona}`), seg: esc(r.persona_blockers[0].name) })}${r.persona_blockers.length > 1 ? t('r.more', { n: r.persona_blockers.length - 1 }) : ''}</div>` : ''}
         </div>`;
       card.addEventListener('click', () => activateRoute(r.index));
       host.appendChild(card);
@@ -545,22 +596,52 @@
     const b = $('#btn-locate'); b.classList.add('is-busy');
     try {
       const p = await M.locate();
-      if (state.tab === 'contribute' && state.segPoints.length === 0) { M.setPicks([p]); toast('Start set to your location. Tap where you stopped.', 'ok'); }
-      else if (state.tab === 'route' && state.routePoints.length === 0) { M.setPicks([p]); toast('Starting from your location. Tap the destination.', 'ok'); }
+      if (state.tab === 'contribute' && state.segPoints.length === 0) { M.setPicks([p]); toast(t('toast.locate.start'), 'ok'); }
+      else if (state.tab === 'route' && state.routePoints.length === 0) { M.setPicks([p]); toast(t('toast.locate.route'), 'ok'); }
     } catch (err) { toast(err.message, 'error'); } finally { b.classList.remove('is-busy'); }
   });
+
+  // ---------- offline queue (service worker) ----------
+  let queueCount = 0;
+  function updateQueueBadge() {
+    const b = $('#queue-badge');
+    b.hidden = queueCount === 0;
+    $('#queue-text').textContent = queueCount === 1 ? t('c.queue.badge.one') : t('c.queue.badge.many', { n: queueCount });
+  }
+  const swMessage = (msg) => navigator.serviceWorker?.controller?.postMessage(msg);
+  $('#btn-queue-sync').addEventListener('click', () => swMessage({ type: 'rasta:replay' }));
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.addEventListener('message', async (e) => {
+      const m = e.data || {};
+      if (m.type === 'rasta:queue') { queueCount = m.count || 0; updateQueueBadge(); }
+      if (m.type === 'rasta:replayed') {
+        if (m.ok) { toast(t('c.replayed', { name: m.name || m.segment?.name || '' }), 'ok'); await loadSegments(); loadStats(); }
+        else toast(t('c.replay.failed', { err: m.error }), 'error');
+      }
+    });
+    window.addEventListener('load', async () => {
+      try {
+        await navigator.serviceWorker.register('/sw.js');
+        await navigator.serviceWorker.ready;
+        swMessage({ type: 'rasta:queue-count' });
+        if (navigator.onLine) swMessage({ type: 'rasta:replay' });
+      } catch (err) { console.warn('service worker not registered', err.message); }
+    });
+  }
+  window.addEventListener('online', () => { toast(t('toast.online'), 'ok'); swMessage({ type: 'rasta:replay' }); });
+  window.addEventListener('offline', () => toast(t('toast.offline'), 'error'));
 
   // ---------- boot ----------
   (async function boot() {
     try {
       const health = await api('/api/health');
-      if (health.mock) { const s = $('#ledger-status'); s.hidden = false; s.textContent = 'Mock vision — add ANTHROPIC_API_KEY to .env'; }
-      else if (health.budget_reached) { const s = $('#ledger-status'); s.hidden = false; s.textContent = "Today's analysis budget is used up"; }
-    } catch { toast('Server unreachable', 'error'); }
-    try { state.standards = await api('/api/standards'); state.types = Object.fromEntries(state.standards.hazard_types.map((t) => [t.id, t])); } catch { toast('Knowledge file failed to load — hazard labels will be raw ids', 'error'); }
+      if (health.mock) { const s = $('#ledger-status'); s.hidden = false; s.textContent = t('ledger.mock'); }
+      else if (health.budget_reached) { const s = $('#ledger-status'); s.hidden = false; s.textContent = t('ledger.budget'); }
+    } catch { toast(t('toast.server'), 'error'); }
+    try { state.standards = await api('/api/standards'); state.types = Object.fromEntries(state.standards.hazard_types.map((x) => [x.id, x])); } catch { toast(t('toast.knowledge'), 'error'); }
     const gj = await loadSegments();
     if (gj && gj.features.length) M.fitAll();
-    else $('#segment-detail').innerHTML = `<div class="empty"><h2>Nothing mapped yet.</h2><p>Walk a footpath with the camera and it will appear here in colour.</p></div>`;
+    else $('#segment-detail').innerHTML = `<div class="empty"><h2>${t('empty.none.title')}</h2><p>${t('empty.none.body')}</p></div>`;
     loadStats();
     maybeDemo();
   })();

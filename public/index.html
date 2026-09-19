@@ -9,14 +9,15 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,300..900&family=Noto+Sans+Devanagari:wght@400;600&display=swap" rel="stylesheet">
+<link rel="manifest" href="/manifest.webmanifest">
 <link rel="stylesheet" href="/vendor/leaflet/leaflet.css">
 <link rel="stylesheet" href="/styles.css">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%230F172A'/%3E%3Cpath d='M7 24 L14 8 L18 18 L25 8' fill='none' stroke='%23F59E0B' stroke-width='3.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
 </head>
 <body>
-<a class="skip" href="#panel">Skip to panel</a>
+<a class="skip" href="#panel" data-i18n="map.skip">Skip to panel</a>
 
-<div id="map" role="application" aria-label="Footpath map"></div>
+<div id="map" role="application" aria-label="Footpath map" data-i18n-attr="aria-label:map.aria"></div>
 
 <!-- top strip: the city's ledger -->
 <header class="ledger" id="ledger" aria-live="polite">
@@ -25,54 +26,55 @@
     <span>Rasta</span>
   </div>
   <dl class="ledger-figures">
-    <div><dt>footpaths walked</dt><dd data-stat="segments">0</dd></div>
-    <div><dt>hazards found</dt><dd data-stat="hazards">0</dd></div>
-    <div><dt>km covered</dt><dd data-stat="km_covered">0</dd></div>
-    <div><dt>to fix everything</dt><dd data-stat="total_cost_inr">₹0</dd></div>
+    <div><dt data-i18n="ledger.segments">footpaths walked</dt><dd data-stat="segments">0</dd></div>
+    <div><dt data-i18n="ledger.hazards">hazards found</dt><dd data-stat="hazards">0</dd></div>
+    <div><dt data-i18n="ledger.km">km covered</dt><dd data-stat="km_covered">0</dd></div>
+    <div><dt data-i18n="ledger.cost">to fix everything</dt><dd data-stat="total_cost_inr">₹0</dd></div>
   </dl>
   <div class="ledger-status" id="ledger-status" hidden></div>
+  <button type="button" class="lang-toggle" id="btn-lang" data-i18n="lang.toggle" data-i18n-attr="aria-label:lang.aria" aria-label="Switch language to Hindi" lang="hi">हिन्दी</button>
 </header>
 
 <!-- tabs -->
-<nav class="tabs" role="tablist" aria-label="Sections">
+<nav class="tabs" role="tablist" aria-label="Sections" aria-orientation="vertical">
   <button class="tab is-active" role="tab" id="tab-map" aria-selected="true" aria-controls="view-map" data-tab="map">
     <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6l6-2 6 2 6-2v14l-6 2-6-2-6 2z"/><path d="M9 4v14M15 6v14"/></svg>
-    <span>Map</span>
+    <span data-i18n="tab.map">Map</span>
   </button>
-  <button class="tab" role="tab" id="tab-contribute" aria-selected="false" aria-controls="view-contribute" data-tab="contribute">
+  <button class="tab" role="tab" id="tab-contribute" aria-selected="false" tabindex="-1" aria-controls="view-contribute" data-tab="contribute">
     <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg>
-    <span>Walk</span>
+    <span data-i18n="tab.walk">Walk</span>
   </button>
-  <button class="tab" role="tab" id="tab-route" aria-selected="false" aria-controls="view-route" data-tab="route">
+  <button class="tab" role="tab" id="tab-route" aria-selected="false" tabindex="-1" aria-controls="view-route" data-tab="route">
     <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="6" r="2.5"/><path d="M8 17c6 0 4-10 10-10"/></svg>
-    <span>Route</span>
+    <span data-i18n="tab.route">Route</span>
   </button>
 </nav>
 
 <!-- map-only controls -->
 <div class="map-tools" id="map-tools">
-  <div class="lens" role="radiogroup" aria-label="View the map as">
-    <button class="lens-opt is-active" role="radio" aria-checked="true" data-lens="score">Score</button>
-    <button class="lens-opt" role="radio" aria-checked="false" data-lens="walk">Walking</button>
-    <button class="lens-opt" role="radio" aria-checked="false" data-lens="wheelchair">Wheelchair</button>
-    <button class="lens-opt" role="radio" aria-checked="false" data-lens="senior">Senior</button>
+  <div class="lens" role="radiogroup" aria-label="View the map as" data-i18n-attr="aria-label:lens.label">
+    <button class="lens-opt is-active" role="radio" aria-checked="true" data-lens="score" data-i18n="lens.score">Score</button>
+    <button class="lens-opt" role="radio" aria-checked="false" data-lens="walk" data-i18n="lens.walk" tabindex="-1">Walking</button>
+    <button class="lens-opt" role="radio" aria-checked="false" data-lens="wheelchair" data-i18n="lens.wheelchair" tabindex="-1">Wheelchair</button>
+    <button class="lens-opt" role="radio" aria-checked="false" data-lens="senior" data-i18n="lens.senior" tabindex="-1">Senior</button>
   </div>
-  <p class="lens-note" id="lens-note"></p>
+  <p class="lens-note" id="lens-note" aria-live="polite"></p>
 </div>
 
 <div class="map-buttons">
-  <button class="mapbtn" id="btn-locate" title="Find me" aria-label="Centre on my location">
+  <button class="mapbtn" id="btn-locate" title="Find me" aria-label="Centre on my location" data-i18n-attr="aria-label:map.locate;title:map.locate">
     <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M12 2v4M12 18v4M2 12h4M18 12h4"/><circle cx="12" cy="12" r="8"/></svg>
   </button>
-  <button class="mapbtn" id="btn-fit" title="Show all footpaths" aria-label="Fit all footpaths in view">
+  <button class="mapbtn" id="btn-fit" title="Show all footpaths" aria-label="Fit all footpaths in view" data-i18n-attr="aria-label:map.fit;title:map.fit">
     <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg>
   </button>
 </div>
 
 <div class="legend" id="legend" aria-hidden="true">
-  <span><i style="--c:#22C55E"></i>above 70</span>
-  <span><i style="--c:#F59E0B"></i>40 to 70</span>
-  <span><i style="--c:#DC2626"></i>under 40</span>
+  <span><i style="--c:#22C55E"></i><span data-i18n="legend.high">above 70</span></span>
+  <span><i style="--c:#F59E0B"></i><span data-i18n="legend.mid">40 to 70</span></span>
+  <span><i style="--c:#DC2626"></i><span data-i18n="legend.low">under 40</span></span>
 </div>
 
 <!-- the panel: right sheet on desktop, bottom sheet on phones -->
@@ -83,9 +85,9 @@
   <section class="view is-active" id="view-map" role="tabpanel" aria-labelledby="tab-map">
     <div class="panel-scroll" id="segment-detail">
       <div class="empty">
-        <h2>Tap a footpath.</h2>
-        <p>Every coloured line is a stretch someone walked and photographed. Tap one to see what they found, who can pass it, and what it would cost to fix.</p>
-        <p class="hint">Green passes. Amber slows people down. Red blocks a wheelchair or trips a senior.</p>
+                <h2 data-i18n="empty.title">Tap a footpath.</h2>
+        <p data-i18n="empty.body">Every coloured line is a stretch someone walked and photographed. Tap one to see what they found, who can pass it, and what it would cost to fix.</p>
+        <p class="hint" data-i18n="empty.hint">Green passes. Amber slows people down. Red blocks a wheelchair or trips a senior.</p>
       </div>
     </div>
   </section>
@@ -99,16 +101,16 @@
             <div class="step-head">
               <span class="step-n">1</span>
               <div>
-                <h2>Mark the stretch you walked</h2>
+                <h2 data-i18n="c.step1">Mark the stretch you walked</h2>
                 <p id="points-hint">Tap the map where you started, then where you stopped.</p>
               </div>
             </div>
             <div class="points" id="points">
-              <div class="point"><b>A</b><span data-pt="a">start</span></div>
-              <div class="point"><b>B</b><span data-pt="b">end</span></div>
+              <div class="point"><b>A</b><span data-pt="a" data-i18n="c.start">start</span></div>
+              <div class="point"><b>B</b><span data-pt="b" data-i18n="c.end">end</span></div>
               <span class="points-len" id="points-len"></span>
-              <button type="button" class="ghost" id="btn-clear-points">Clear</button>
-              <button type="button" class="ghost gps" id="btn-place-gps" hidden title="Use the location stored in the first and last photo">Place from photo GPS</button>
+              <button type="button" class="ghost" id="btn-clear-points" data-i18n="c.clear">Clear</button>
+              <button type="button" class="ghost gps" id="btn-place-gps" hidden title="Use the location stored in the first and last photo" data-i18n-attr="title:c.gps.title">Place from photo GPS</button>
             </div>
           </div>
 
@@ -116,11 +118,11 @@
             <div class="step-head">
               <span class="step-n">2</span>
               <div>
-                <h2>Name it the way a local would</h2>
+                <h2 data-i18n="c.step2">Name it the way a local would</h2>
               </div>
             </div>
             <label class="field">
-              <input type="text" id="seg-name" name="name" maxlength="120" placeholder="Metro Gate 3 to the bus stop" autocomplete="off">
+              <input type="text" id="seg-name" name="name" maxlength="120" placeholder="Metro Gate 3 to the bus stop" autocomplete="off" data-i18n-attr="placeholder:c.name.ph" aria-label="Footpath name">
             </label>
           </div>
 
@@ -128,14 +130,14 @@
             <div class="step-head">
               <span class="step-n">3</span>
               <div>
-                <h2>Add the photos</h2>
-                <p>Every 20 to 30 metres, pointing along the footpath. Phone photos are resized on your device before upload.</p>
+                <h2 data-i18n="c.step3">Add the photos</h2>
+                <p data-i18n="c.step3.body">Every 20 to 30 metres, pointing along the footpath. Phone photos are resized on your device before upload.</p>
               </div>
             </div>
-            <label class="dropzone" id="dropzone" for="photo-input" tabindex="0">
+            <label class="dropzone" id="dropzone" for="photo-input" tabindex="0" role="button" aria-describedby="drop-small">
               <input type="file" id="photo-input" accept="image/*" multiple capture="environment" hidden>
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg>
-              <span><strong>Take or choose photos</strong><small>up to 12 · JPG, PNG, HEIC converts on iPhone</small></span>
+              <span><strong data-i18n="c.drop">Take or choose photos</strong><small id="drop-small" data-i18n="c.drop.small">up to 12 · JPG, PNG, HEIC converts on iPhone</small></span>
             </label>
             <div id="strip-home"><div class="strip" id="photo-strip"></div></div>
           </div>
@@ -143,10 +145,11 @@
 
         <div class="analyse-bar">
           <button type="submit" class="primary" id="btn-analyse" disabled>
-            <span class="label">Analyse footpath</span>
+            <span class="label" data-i18n="c.analyse">Analyse footpath</span>
             <span class="count" id="analyse-count"></span>
           </button>
-          <p class="analyse-note" id="analyse-note">Mark two points and add at least one photo.</p>
+          <p class="analyse-note" id="analyse-note" aria-live="polite">Mark two points and add at least one photo.</p>
+          <div class="queue-badge" id="queue-badge" hidden role="status"><span id="queue-text"></span> <button type="button" class="ghost" id="btn-queue-sync" data-i18n="c.queue.sync">Upload now</button></div>
         </div>
       </form>
 
@@ -154,22 +157,23 @@
       <div class="result" id="result" hidden>
         <div class="result-top">
           <p class="result-name" id="result-name"></p>
-          <div class="hazard-ticker"><output id="hazard-count">0</output><span>hazards</span></div>
+          <div class="hazard-ticker" aria-live="polite" aria-atomic="true"><output id="hazard-count" aria-label="Hazards found so far">0</output><span data-i18n="c.hazards">hazards</span></div>
         </div>
         <div class="dial-wrap">
           <svg class="dial" viewBox="0 0 200 200" aria-hidden="true">
             <path class="dial-track" d="M40 160 A85 85 0 1 1 160 160"/>
             <path class="dial-arc" id="dial-arc" d="M40 160 A85 85 0 1 1 160 160"/>
           </svg>
-          <div class="dial-num" id="dial-num" aria-live="off">0</div>
-          <div class="dial-cap" id="dial-cap">out of 100</div>
+          <div class="dial-num" id="dial-num" aria-hidden="true">0</div>
+          <div class="dial-cap" id="dial-cap" aria-hidden="true" data-i18n="c.dial.cap">out of 100</div>
+          <p class="sr-only" id="sr-score" role="status" aria-live="polite" aria-atomic="true"></p>
         </div>
         <div id="result-strip-slot"></div>
         <ul class="verdicts" id="result-verdicts"></ul>
         <div class="result-cost" id="result-cost"></div>
         <div class="result-actions">
-          <button type="button" class="primary" id="btn-view-on-map">See it on the map</button>
-          <button type="button" class="ghost" id="btn-another">Walk another</button>
+          <button type="button" class="primary" id="btn-view-on-map" data-i18n="c.view">See it on the map</button>
+          <button type="button" class="ghost" id="btn-another" data-i18n="c.another">Walk another</button>
         </div>
       </div>
     </div>
@@ -182,34 +186,34 @@
         <div class="step">
           <div class="step-head">
             <span class="step-n">1</span>
-            <div><h2>Where from, where to</h2><p id="route-hint">Tap the map for A, then B.</p></div>
+            <div><h2 data-i18n="r.step1">Where from, where to</h2><p id="route-hint" aria-live="polite">Tap the map for A, then B.</p></div>
           </div>
           <div class="points" id="route-points">
-            <div class="point"><b>A</b><span data-rpt="a">from</span></div>
-            <div class="point"><b>B</b><span data-rpt="b">to</span></div>
-            <button type="button" class="ghost" id="btn-route-demo">Use demo pair</button>
-            <button type="button" class="ghost" id="btn-route-clear">Clear</button>
+            <div class="point"><b>A</b><span data-rpt="a" data-i18n="r.from">from</span></div>
+              <div class="point"><b>B</b><span data-rpt="b" data-i18n="r.to">to</span></div>
+            <button type="button" class="ghost" id="btn-route-demo" data-i18n="r.demo">Use demo pair</button>
+              <button type="button" class="ghost" id="btn-route-clear" data-i18n="r.clear">Clear</button>
           </div>
         </div>
         <div class="step">
           <div class="step-head">
             <span class="step-n">2</span>
-            <div><h2>Who is walking</h2></div>
+            <div><h2 data-i18n="r.step2">Who is walking</h2></div>
           </div>
-          <div class="persona" role="radiogroup" aria-label="Persona">
+          <div class="persona" role="radiogroup" aria-label="Persona" data-i18n-attr="aria-label:r.persona.aria">
             <button type="button" class="persona-opt is-active" role="radio" aria-checked="true" data-persona="walk">
-              <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="13" cy="4" r="2"/><path d="M11 8l-3 6 3 2 1 6M11 8l4 3 3-1M11 8l-4 4"/></svg>Walking</button>
-            <button type="button" class="persona-opt" role="radio" aria-checked="false" data-persona="wheelchair">
-              <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="19" r="4"/><circle cx="12" cy="4" r="2"/><path d="M12 7v6h6l3 6M9 15h5"/></svg>Wheelchair</button>
-            <button type="button" class="persona-opt" role="radio" aria-checked="false" data-persona="senior">
-              <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="4" r="2"/><path d="M12 7v7l-3 8M12 14l3 8M12 9l5 2M7 22V11"/></svg>Senior</button>
+              <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="13" cy="4" r="2"/><path d="M11 8l-3 6 3 2 1 6M11 8l4 3 3-1M11 8l-4 4"/></svg><span data-i18n="persona.walk">Walking</span></button>
+            <button type="button" class="persona-opt" role="radio" aria-checked="false" data-persona="wheelchair" tabindex="-1">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="19" r="4"/><circle cx="12" cy="4" r="2"/><path d="M12 7v6h6l3 6M9 15h5"/></svg><span data-i18n="persona.wheelchair">Wheelchair</span></button>
+            <button type="button" class="persona-opt" role="radio" aria-checked="false" data-persona="senior" tabindex="-1">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="4" r="2"/><path d="M12 7v7l-3 8M12 14l3 8M12 9l5 2M7 22V11"/></svg><span data-i18n="persona.senior">Senior</span></button>
           </div>
         </div>
         <div class="analyse-bar">
-          <button type="button" class="primary" id="btn-find-routes" disabled><span class="label">Compare routes</span></button>
-          <p class="analyse-note" id="route-note">Pick two points first.</p>
+          <button type="button" class="primary" id="btn-find-routes" disabled><span class="label" data-i18n="r.compare">Compare routes</span></button>
+          <p class="analyse-note" id="route-note" aria-live="polite">Pick two points first.</p>
         </div>
-        <div id="route-results" class="routes"></div>
+        <div id="route-results" class="routes" aria-live="polite"></div>
       </div>
     </div>
   </section>
@@ -225,20 +229,21 @@
         <h2 data-el="name"></h2>
         <p class="seg-meta" data-el="meta"></p>
       </div>
-      <button class="close" data-el="close" aria-label="Close">×</button>
+      <button class="close" data-el="close" aria-label="Close" data-i18n-attr="aria-label:seg.close">×</button>
     </header>
     <ul class="verdicts" data-el="verdicts"></ul>
     <div class="photos" data-el="photos"></div>
     <div class="hazards" data-el="hazards"></div>
     <div class="cost" data-el="cost"></div>
     <div class="seg-actions">
-      <a class="ghost" data-el="report" target="_blank" rel="noopener">Open engineer's report</a>
+      <a class="ghost" data-el="report" target="_blank" rel="noopener" data-i18n="seg.report">Open engineer's report</a>
     </div>
   </article>
 </template>
 
 <script src="/vendor/leaflet/leaflet.js"></script>
 <script src="/vendor/exifr/lite.umd.js"></script>
+<script src="/i18n.js"></script>
 <script src="/map.js"></script>
 <script src="/app.js"></script>
 </body>

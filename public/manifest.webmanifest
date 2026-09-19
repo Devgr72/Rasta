@@ -1,0 +1,17 @@
+{
+  "name": "Rasta — footpath accessibility map",
+  "short_name": "Rasta",
+  "description": "Walk a street with your phone, and the city gets a little more mapped.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0F172A",
+  "theme_color": "#0F172A",
+  "lang": "en",
+  "categories": ["navigation", "utilities"],
+  "icons": [
+    { "src": "/icons/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
+    { "src": "/icons/icon-maskable.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "maskable" }
+  ]
+}
