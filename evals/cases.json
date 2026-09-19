@@ -1,0 +1,13 @@
+{
+  "_note": "Ground truth for the eval photos. Put the photos in evals/photos/ and list the hazard type_ids actually present. A hit is a predicted type_id that appears in expected; a miss is an expected id never predicted; a false positive is a predicted id not in expected.",
+  "cases": [
+    { "photo": "photos/01_kashmere_gate.jpg", "expected": ["broken_paver", "missing_drain_cover"] },
+    { "photo": "photos/02_lothian_rd.jpg", "expected": ["obstructing_pole", "uneven_level"] },
+    { "photo": "photos/03_chandni_chowk.jpg", "expected": [] },
+    { "photo": "photos/04_red_fort.jpg", "expected": ["standing_water", "missing_tactile"] },
+    { "photo": "photos/05_rajpur_rd.jpg", "expected": ["parked_vehicle", "high_kerb"] },
+    { "photo": "photos/06_barakhamba.jpg", "expected": ["transformer_on_path", "broken_paver"] },
+    { "photo": "photos/07_janpath.jpg", "expected": ["vendor_encroachment"] },
+    { "photo": "photos/08_ito.jpg", "expected": ["construction_debris", "open_manhole"] }
+  ]
+}

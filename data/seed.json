@@ -1,0 +1,108 @@
+{
+  "_note": "Pre-walked segments loaded on first boot when the DB is empty. Coordinates are on real Delhi streets; hazard entries are hand-recorded scaffolding for the demo map and should be replaced by segments walked with the Contribute tab. Photos are not bundled.",
+  "segments": [
+    {
+      "name": "Kashmere Gate Metro Gate 3 to Lothian Rd",
+      "start": { "lat": 28.6672, "lng": 77.2286 }, "end": { "lat": 28.6630, "lng": 77.2300 },
+      "photos": [
+        { "surface_type": "paver", "estimated_clear_width_m": 1.0, "observations": "Pavers lifted along the metro boundary wall, drain uncovered near the auto stand.",
+          "hazards": [
+            { "type_id": "broken_paver", "severity": 4, "bbox": { "x": 0.18, "y": 0.55, "w": 0.42, "h": 0.25 }, "note": "Six tiles missing, 70 mm drop" },
+            { "type_id": "missing_drain_cover", "severity": 5, "bbox": { "x": 0.62, "y": 0.66, "w": 0.2, "h": 0.14 }, "note": "Grating missing over 0.6 m drain" } ] },
+        { "surface_type": "paver", "estimated_clear_width_m": 0.8, "observations": "Auto-rickshaws parked across the footpath at the metro exit.",
+          "hazards": [
+            { "type_id": "parked_vehicle", "severity": 3, "bbox": { "x": 0.05, "y": 0.35, "w": 0.55, "h": 0.45 }, "note": "Two autos on the footpath" },
+            { "type_id": "no_kerb_ramp", "severity": 3, "bbox": { "x": 0.6, "y": 0.7, "w": 0.35, "h": 0.2 }, "note": "180 mm kerb, no ramp at the crossing" } ] }
+      ]
+    },
+    {
+      "name": "Lothian Rd to Old Delhi Railway Station",
+      "start": { "lat": 28.6630, "lng": 77.2300 }, "end": { "lat": 28.6598, "lng": 77.2288 },
+      "photos": [
+        { "surface_type": "concrete", "estimated_clear_width_m": 1.4, "observations": "Concrete footpath, cracked but continuous. Electric pole mid-path.",
+          "hazards": [
+            { "type_id": "obstructing_pole", "severity": 3, "bbox": { "x": 0.44, "y": 0.2, "w": 0.1, "h": 0.65 }, "note": "Pole leaves 0.9 m either side" },
+            { "type_id": "uneven_level", "severity": 2, "bbox": { "x": 0.1, "y": 0.75, "w": 0.6, "h": 0.15 }, "note": "Slabs tilted, 20 mm lips" } ] }
+      ]
+    },
+    {
+      "name": "Chandni Chowk: Fatehpuri Masjid to Town Hall",
+      "start": { "lat": 28.6565, "lng": 77.2270 }, "end": { "lat": 28.6560, "lng": 77.2320 },
+      "photos": [
+        { "surface_type": "stone", "estimated_clear_width_m": 3.5, "observations": "Redeveloped pedestrian street, granite paving, level throughout, tactile strip present.",
+          "hazards": [] },
+        { "surface_type": "stone", "estimated_clear_width_m": 3.0, "observations": "Vendor carts along the edge but wide clear path remains.",
+          "hazards": [
+            { "type_id": "vendor_encroachment", "severity": 1, "bbox": { "x": 0.7, "y": 0.4, "w": 0.28, "h": 0.4 }, "note": "Carts within the vending line" } ] }
+      ]
+    },
+    {
+      "name": "Netaji Subhash Marg along Red Fort wall",
+      "start": { "lat": 28.6562, "lng": 77.2400 }, "end": { "lat": 28.6500, "lng": 77.2402 },
+      "photos": [
+        { "surface_type": "paver", "estimated_clear_width_m": 2.2, "observations": "Wide footpath, some standing water at the low point near the bus stop.",
+          "hazards": [
+            { "type_id": "standing_water", "severity": 2, "bbox": { "x": 0.2, "y": 0.6, "w": 0.5, "h": 0.2 }, "note": "Puddle across 3 m of path" },
+            { "type_id": "missing_tactile", "severity": 2, "bbox": { "x": 0.0, "y": 0.5, "w": 1.0, "h": 0.3 }, "note": "No guiding tiles on the whole run" } ] }
+      ]
+    },
+    {
+      "name": "Mall Road, Civil Lines near Metro",
+      "start": { "lat": 28.6790, "lng": 77.2240 }, "end": { "lat": 28.6830, "lng": 77.2252 },
+      "photos": [
+        { "surface_type": "paver", "estimated_clear_width_m": 1.9, "observations": "Well laid interlocking pavers, kerb ramps at both ends, one low branch.",
+          "hazards": [
+            { "type_id": "overgrown_vegetation", "severity": 1, "bbox": { "x": 0.55, "y": 0.05, "w": 0.4, "h": 0.35 }, "note": "Branch at about 1.9 m headroom" } ] }
+      ]
+    },
+    {
+      "name": "Rajpur Rd, Civil Lines market stretch",
+      "start": { "lat": 28.6760, "lng": 77.2270 }, "end": { "lat": 28.6800, "lng": 77.2300 },
+      "photos": [
+        { "surface_type": "paver", "estimated_clear_width_m": 0.7, "observations": "Cars parked nose-in over the footpath for the whole market frontage.",
+          "hazards": [
+            { "type_id": "parked_vehicle", "severity": 4, "bbox": { "x": 0.0, "y": 0.3, "w": 0.75, "h": 0.55 }, "note": "Continuous parking, forces walking on the carriageway" },
+            { "type_id": "high_kerb", "severity": 3, "bbox": { "x": 0.3, "y": 0.78, "w": 0.6, "h": 0.12 }, "note": "Kerb about 220 mm" } ] }
+      ]
+    },
+    {
+      "name": "Connaught Place Outer Circle, Block M to N",
+      "start": { "lat": 28.6330, "lng": 77.2170 }, "end": { "lat": 28.6342, "lng": 77.2230 },
+      "photos": [
+        { "surface_type": "stone", "estimated_clear_width_m": 4.0, "observations": "Colonnaded arcade, smooth stone, level access; steps at the colonnade ends without ramps.",
+          "hazards": [
+            { "type_id": "no_kerb_ramp", "severity": 3, "bbox": { "x": 0.35, "y": 0.6, "w": 0.4, "h": 0.25 }, "note": "Three steps down to the road, no ramp" } ] }
+      ]
+    },
+    {
+      "name": "Barakhamba Rd, Metro to Tolstoy Marg",
+      "start": { "lat": 28.6300, "lng": 77.2240 }, "end": { "lat": 28.6278, "lng": 77.2300 },
+      "photos": [
+        { "surface_type": "paver", "estimated_clear_width_m": 1.1, "observations": "Transformer enclosure occupies half the footpath; pavers broken around it.",
+          "hazards": [
+            { "type_id": "transformer_on_path", "severity": 4, "bbox": { "x": 0.5, "y": 0.2, "w": 0.45, "h": 0.6 }, "note": "Fenced transformer, 1.1 m left to pass" },
+            { "type_id": "broken_paver", "severity": 3, "bbox": { "x": 0.1, "y": 0.7, "w": 0.4, "h": 0.2 }, "note": "Loose tiles at the transformer base" } ] }
+      ]
+    },
+    {
+      "name": "Janpath, Tolstoy Marg to Janpath Market",
+      "start": { "lat": 28.6260, "lng": 77.2190 }, "end": { "lat": 28.6200, "lng": 77.2192 },
+      "photos": [
+        { "surface_type": "concrete", "estimated_clear_width_m": 1.3, "observations": "Market stalls extend onto the footpath; surface itself is sound.",
+          "hazards": [
+            { "type_id": "vendor_encroachment", "severity": 3, "bbox": { "x": 0.0, "y": 0.3, "w": 0.5, "h": 0.55 }, "note": "Stalls take 1.5 m of a 2.8 m footpath" },
+            { "type_id": "missing_streetlight", "severity": 2, "bbox": { "x": 0.8, "y": 0.0, "w": 0.15, "h": 0.5 }, "note": "Pole present, no luminaire" } ] }
+      ]
+    },
+    {
+      "name": "Mandi House to ITO, Tansen Marg side",
+      "start": { "lat": 28.6255, "lng": 77.2340 }, "end": { "lat": 28.6232, "lng": 77.2400 },
+      "photos": [
+        { "surface_type": "paver", "estimated_clear_width_m": 1.6, "observations": "Construction hoarding for a building site, debris spilled across the path.",
+          "hazards": [
+            { "type_id": "construction_debris", "severity": 4, "bbox": { "x": 0.2, "y": 0.45, "w": 0.6, "h": 0.4 }, "note": "Sand and aggregate heap across 4 m" },
+            { "type_id": "open_manhole", "severity": 5, "bbox": { "x": 0.65, "y": 0.75, "w": 0.18, "h": 0.15 }, "note": "Cover displaced, 0.5 m opening" } ] }
+      ]
+    }
+  ]
+}

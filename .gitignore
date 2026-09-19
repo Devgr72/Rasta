@@ -7,3 +7,4 @@ data/rasta.db-shm
 data/vision-cache/
 uploads/
 .DS_Store
+evals/last-run.json
