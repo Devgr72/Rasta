@@ -9,72 +9,113 @@ const db = new Database(DB_PATH);
 db.pragma('journal_mode = WAL');
 db.pragma('foreign_keys = ON');
 
-db.exec(`
-CREATE TABLE IF NOT EXISTS segments (
-  id INTEGER PRIMARY KEY,
-  name TEXT,
-  start_lat REAL, start_lng REAL,
-  end_lat REAL, end_lng REAL,
-  length_m REAL,
-  score INTEGER,
-  walk_ok INTEGER,
-  wheelchair_ok INTEGER,
-  senior_ok INTEGER,
-  walk_reason TEXT,
-  wheelchair_reason TEXT,
-  senior_reason TEXT,
-  clear_width_m REAL,
-  surface_type TEXT,
-  total_cost_inr INTEGER,
-  created_at TEXT
-);
-CREATE TABLE IF NOT EXISTS photos (
-  id INTEGER PRIMARY KEY,
-  segment_id INTEGER REFERENCES segments(id) ON DELETE CASCADE,
-  filename TEXT,
-  hash TEXT,
-  width_m REAL,
-  observations TEXT,
-  status TEXT,
-  created_at TEXT
-);
-CREATE TABLE IF NOT EXISTS hazards (
-  id INTEGER PRIMARY KEY,
-  segment_id INTEGER REFERENCES segments(id) ON DELETE CASCADE,
-  photo_id INTEGER REFERENCES photos(id) ON DELETE SET NULL,
-  type_id TEXT,
-  severity INTEGER,
-  note TEXT,
-  bbox TEXT,
-  cost_inr INTEGER,
-  authority TEXT
-);
-CREATE INDEX IF NOT EXISTS idx_hazards_segment ON hazards(segment_id);
-CREATE INDEX IF NOT EXISTS idx_photos_segment ON photos(segment_id);
-CREATE TABLE IF NOT EXISTS vision_calls (
-  id INTEGER PRIMARY KEY,
-  hash TEXT,
-  model TEXT,
-  input_tokens INTEGER DEFAULT 0,
-  output_tokens INTEGER DEFAULT 0,
-  cache_read_tokens INTEGER DEFAULT 0,
-  latency_ms INTEGER,
-  cached INTEGER DEFAULT 0,
-  error TEXT,
-  created_at TEXT
-);
-CREATE INDEX IF NOT EXISTS idx_vision_calls_created ON vision_calls(created_at);
-CREATE INDEX IF NOT EXISTS idx_vision_calls_hash ON vision_calls(hash);
-`);
+// ---------- migrations ----------
+// Ordered SQL strings. Each runs once, inside a transaction, and bumps schema_version.
+// `ALTER TABLE ... ADD COLUMN` on a column that already exists is tolerated so a migration can
+// be re-run safely against a database that was created before the runner existed.
+const MIGRATIONS = [
+  // 1 — the hackathon schema
+  `
+  CREATE TABLE IF NOT EXISTS segments (
+    id INTEGER PRIMARY KEY,
+    name TEXT,
+    start_lat REAL, start_lng REAL,
+    end_lat REAL, end_lng REAL,
+    length_m REAL,
+    score INTEGER,
+    walk_ok INTEGER,
+    wheelchair_ok INTEGER,
+    senior_ok INTEGER,
+    walk_reason TEXT,
+    wheelchair_reason TEXT,
+    senior_reason TEXT,
+    clear_width_m REAL,
+    surface_type TEXT,
+    total_cost_inr INTEGER,
+    created_at TEXT
+  );
+  CREATE TABLE IF NOT EXISTS photos (
+    id INTEGER PRIMARY KEY,
+    segment_id INTEGER REFERENCES segments(id) ON DELETE CASCADE,
+    filename TEXT,
+    hash TEXT,
+    width_m REAL,
+    observations TEXT,
+    status TEXT,
+    created_at TEXT
+  );
+  CREATE TABLE IF NOT EXISTS hazards (
+    id INTEGER PRIMARY KEY,
+    segment_id INTEGER REFERENCES segments(id) ON DELETE CASCADE,
+    photo_id INTEGER REFERENCES photos(id) ON DELETE SET NULL,
+    type_id TEXT,
+    severity INTEGER,
+    note TEXT,
+    bbox TEXT,
+    cost_inr INTEGER,
+    authority TEXT
+  );
+  CREATE INDEX IF NOT EXISTS idx_hazards_segment ON hazards(segment_id);
+  CREATE INDEX IF NOT EXISTS idx_photos_segment ON photos(segment_id);
+  `,
+  // 2 — token accounting + DB-backed vision cache, snapped geometry, photo GPS and capture time
+  `
+  CREATE TABLE IF NOT EXISTS vision_calls (
+    id INTEGER PRIMARY KEY,
+    hash TEXT,
+    model TEXT,
+    input_tokens INTEGER DEFAULT 0,
+    output_tokens INTEGER DEFAULT 0,
+    cache_read_tokens INTEGER DEFAULT 0,
+    latency_ms INTEGER,
+    cached INTEGER DEFAULT 0,
+    error TEXT,
+    created_at TEXT
+  );
+  ALTER TABLE vision_calls ADD COLUMN result TEXT;
+  CREATE INDEX IF NOT EXISTS idx_vision_calls_created ON vision_calls(created_at);
+  CREATE INDEX IF NOT EXISTS idx_vision_calls_hash ON vision_calls(hash);
+  ALTER TABLE segments ADD COLUMN geometry TEXT;
+  ALTER TABLE photos ADD COLUMN photo_lat REAL;
+  ALTER TABLE photos ADD COLUMN photo_lng REAL;
+  ALTER TABLE photos ADD COLUMN taken_at TEXT;
+  `,
+];
+
+function migrate(conn, migrations = MIGRATIONS) {
+  conn.exec(`CREATE TABLE IF NOT EXISTS schema_version (version INTEGER PRIMARY KEY, applied_at TEXT)`);
+  let version = conn.prepare(`SELECT COALESCE(MAX(version), 0) AS v FROM schema_version`).get().v;
+  // A database created before the runner existed has the migration-1 tables but no version row.
+  if (version === 0 && conn.prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'segments'`).get()) {
+    conn.prepare(`INSERT INTO schema_version (version, applied_at) VALUES (1, ?)`).run(new Date().toISOString());
+    version = 1;
+  }
+  const applied = [];
+  const runOne = conn.transaction((n, sql) => {
+    for (const stmt of sql.split(';').map((s) => s.trim()).filter(Boolean)) {
+      try { conn.exec(stmt); } catch (err) {
+        if (/duplicate column name/i.test(err.message) && /ALTER TABLE .* ADD COLUMN/i.test(stmt)) continue;
+        throw new Error(`migration ${n} failed at "${stmt.slice(0, 60)}…": ${err.message}`);
+      }
+    }
+    conn.prepare(`INSERT INTO schema_version (version, applied_at) VALUES (?, ?)`).run(n, new Date().toISOString());
+  });
+  for (let n = version + 1; n <= migrations.length; n++) { runOne(n, migrations[n - 1]); applied.push(n); }
+  if (applied.length) console.log(`[db] migrated to schema version ${migrations.length} (applied ${applied.join(', ')})`);
+  return { version: migrations.length, applied };
+}
+
+migrate(db);
 
 const q = {
   insertSegment: db.prepare(`INSERT INTO segments
     (name, start_lat, start_lng, end_lat, end_lng, length_m, score, walk_ok, wheelchair_ok, senior_ok,
-     walk_reason, wheelchair_reason, senior_reason, clear_width_m, surface_type, total_cost_inr, created_at)
+     walk_reason, wheelchair_reason, senior_reason, clear_width_m, surface_type, total_cost_inr, geometry, created_at)
     VALUES (@name, @start_lat, @start_lng, @end_lat, @end_lng, @length_m, @score, @walk_ok, @wheelchair_ok, @senior_ok,
-     @walk_reason, @wheelchair_reason, @senior_reason, @clear_width_m, @surface_type, @total_cost_inr, @created_at)`),
-  insertPhoto: db.prepare(`INSERT INTO photos (segment_id, filename, hash, width_m, observations, status, created_at)
-    VALUES (@segment_id, @filename, @hash, @width_m, @observations, @status, @created_at)`),
+     @walk_reason, @wheelchair_reason, @senior_reason, @clear_width_m, @surface_type, @total_cost_inr, @geometry, @created_at)`),
+  insertPhoto: db.prepare(`INSERT INTO photos (segment_id, filename, hash, width_m, observations, status, photo_lat, photo_lng, taken_at, created_at)
+    VALUES (@segment_id, @filename, @hash, @width_m, @observations, @status, @photo_lat, @photo_lng, @taken_at, @created_at)`),
+  cachedResult: db.prepare(`SELECT result FROM vision_calls WHERE hash = ? AND result IS NOT NULL ORDER BY id DESC LIMIT 1`),
   insertHazard: db.prepare(`INSERT INTO hazards (segment_id, photo_id, type_id, severity, note, bbox, cost_inr, authority)
     VALUES (@segment_id, @photo_id, @type_id, @severity, @note, @bbox, @cost_inr, @authority)`),
   allSegments: db.prepare(`SELECT s.*, (SELECT COUNT(*) FROM hazards h WHERE h.segment_id = s.id) AS hazard_count,
@@ -91,8 +132,8 @@ const q = {
     (SELECT COALESCE(SUM(total_cost_inr), 0) FROM segments) AS total_cost_inr,
     (SELECT COUNT(*) FROM segments WHERE wheelchair_ok = 1) AS wheelchair_ok_count,
     (SELECT COUNT(*) FROM segments WHERE senior_ok = 1) AS senior_ok_count`),
-  insertVisionCall: db.prepare(`INSERT INTO vision_calls (hash, model, input_tokens, output_tokens, cache_read_tokens, latency_ms, cached, error, created_at)
-    VALUES (@hash, @model, @input_tokens, @output_tokens, @cache_read_tokens, @latency_ms, @cached, @error, @created_at)`),
+  insertVisionCall: db.prepare(`INSERT INTO vision_calls (hash, model, input_tokens, output_tokens, cache_read_tokens, latency_ms, cached, error, result, created_at)
+    VALUES (@hash, @model, @input_tokens, @output_tokens, @cache_read_tokens, @latency_ms, @cached, @error, @result, @created_at)`),
   visionUsageSince: db.prepare(`SELECT COUNT(*) AS calls,
     COALESCE(SUM(CASE WHEN cached = 0 AND error IS NULL AND model != 'mock' THEN 1 ELSE 0 END), 0) AS model_calls,
     COALESCE(SUM(CASE WHEN model = 'mock' THEN 1 ELSE 0 END), 0) AS mock_calls,
@@ -126,6 +167,7 @@ const saveSegment = db.transaction((graded, photos) => {
     clear_width_m: graded.clear_width_m,
     surface_type: graded.surface_type,
     total_cost_inr: graded.total_cost_inr,
+    geometry: graded.geometry ? JSON.stringify(graded.geometry) : null, // GeoJSON LineString, snapped to the footway when available
     created_at: graded.created_at || now(),
   });
   const segmentId = Number(info.lastInsertRowid);
@@ -137,6 +179,9 @@ const saveSegment = db.transaction((graded, photos) => {
       width_m: p.estimated_clear_width_m ?? null,
       observations: p.observations || '',
       status: p.status || 'ok',
+      photo_lat: Number.isFinite(p.photo_lat) ? p.photo_lat : null,
+      photo_lng: Number.isFinite(p.photo_lng) ? p.photo_lng : null,
+      taken_at: p.taken_at || null,
       created_at: now(),
     });
     const photoId = Number(pi.lastInsertRowid);
@@ -156,12 +201,23 @@ const saveSegment = db.transaction((graded, photos) => {
   return segmentId;
 });
 
+// How a stored filename becomes a URL. The server swaps this for the storage driver's builder
+// (local /uploads/... or an S3 public URL). db.js itself stays storage-agnostic.
+let urlFor = (filename) => `/uploads/${filename}`;
+function setUrlBuilder(fn) { urlFor = fn; }
+
+function parseGeometry(row) {
+  if (row.geometry) { try { return JSON.parse(row.geometry); } catch { /* fall through */ } }
+  return { type: 'LineString', coordinates: [[row.start_lng, row.start_lat], [row.end_lng, row.end_lat]] };
+}
+
 function rowToSegment(row) {
   return {
     id: row.id,
     name: row.name,
     start: { lat: row.start_lat, lng: row.start_lng },
     end: { lat: row.end_lat, lng: row.end_lng },
+    geometry: parseGeometry(row),
     length_m: row.length_m,
     score: row.score,
     clear_width_m: row.clear_width_m,
@@ -183,10 +239,13 @@ function getSegment(id) {
   if (!row) return null;
   const photos = q.photosFor.all(id).map((p) => ({
     id: p.id,
-    url: p.filename ? `/uploads/${p.filename}` : null,
+    url: p.filename ? urlFor(p.filename) : null,
     width_m: p.width_m,
     observations: p.observations,
     status: p.status,
+    lat: p.photo_lat,
+    lng: p.photo_lng,
+    taken_at: p.taken_at,
   }));
   const hazards = q.hazardsFor.all(id).map((h) => ({
     id: h.id,
@@ -211,7 +270,7 @@ function toGeoJSON() {
     features: q.allSegments.all().map((row) => ({
       type: 'Feature',
       id: row.id,
-      geometry: { type: 'LineString', coordinates: [[row.start_lng, row.start_lat], [row.end_lng, row.end_lat]] },
+      geometry: parseGeometry(row),
       properties: rowToSegment(row),
     })),
   };
@@ -234,8 +293,11 @@ function isEmpty() {
   return q.count.get().n === 0;
 }
 
-/** Record one vision call (model call, cache hit, mock or failure) for budgeting and stats. */
-function recordVisionCall({ hash, model, input_tokens = 0, output_tokens = 0, cache_read_tokens = 0, latency_ms = null, cached = false, error = null }) {
+/**
+ * Record one vision call (model call, cache hit, mock or failure) for budgeting and stats.
+ * Pass `result` (the validated contract object) on a successful model call to make it the cache entry for that hash.
+ */
+function recordVisionCall({ hash, model, input_tokens = 0, output_tokens = 0, cache_read_tokens = 0, latency_ms = null, cached = false, error = null, result = null }) {
   try {
     q.insertVisionCall.run({
       hash: hash || null, model: model || null,
@@ -243,9 +305,18 @@ function recordVisionCall({ hash, model, input_tokens = 0, output_tokens = 0, ca
       output_tokens: Math.max(0, Math.round(Number(output_tokens) || 0)),
       cache_read_tokens: Math.max(0, Math.round(Number(cache_read_tokens) || 0)),
       latency_ms: latency_ms == null ? null : Math.round(latency_ms),
-      cached: cached ? 1 : 0, error: error ? String(error).slice(0, 300) : null, created_at: now(),
+      cached: cached ? 1 : 0, error: error ? String(error).slice(0, 300) : null,
+      result: result ? JSON.stringify(result) : null,
+      created_at: now(),
     });
   } catch (err) { console.warn('[db] vision_calls insert failed', err.message); }
+}
+
+/** The most recent successful vision result for a photo hash — one indexed read. */
+function cachedVisionResult(hash) {
+  const row = q.cachedResult.get(hash);
+  if (!row) return null;
+  try { return JSON.parse(row.result); } catch { return null; }
 }
 
 const startOfUtcDay = () => new Date().toISOString().slice(0, 10) + 'T00:00:00.000Z';
@@ -268,4 +339,8 @@ const deleteSegment = db.transaction((id) => {
   return { id, orphaned_files: [...new Set(orphaned)] };
 });
 
-module.exports = { db, saveSegment, getSegment, allSegments, toGeoJSON, stats, isEmpty, recordVisionCall, visionUsage, deleteSegment };
+module.exports = {
+  db, migrate, MIGRATIONS, setUrlBuilder,
+  saveSegment, getSegment, allSegments, toGeoJSON, stats, isEmpty, deleteSegment,
+  recordVisionCall, cachedVisionResult, visionUsage,
+};

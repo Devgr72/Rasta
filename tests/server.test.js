@@ -36,6 +36,7 @@ describe('GET endpoints', () => {
     assert.equal(r.status, 200);
     const j = await r.json();
     assert.equal(j.ok, true); assert.equal(j.mock, true); assert.equal(j.model, 'claude-fable-5-1');
+    assert.equal(j.storage, 'local'); assert.ok(j.schema_version >= 2);
   });
   test('/api/standards serves the knowledge file', async () => {
     const j = await (await fetch(base + '/api/standards')).json();
@@ -126,6 +127,51 @@ describe('POST /api/segments', () => {
     const r = await json('POST', '/api/segments', { name: 'JSON post', start: { lat: 28.66, lng: 77.22 }, end: { lat: 28.661, lng: 77.221 }, photos: ['data:image/jpeg;base64,' + JPEG.toString('base64')] });
     assert.equal(r.status, 201);
     assert.equal((await r.json()).photos.length, 1);
+  });
+  test('photo_meta hints land in photo_lat/photo_lng/taken_at and come back on the segment', async () => {
+    const r = await json('POST', '/api/segments', {
+      name: 'With GPS', start: { lat: 28.66, lng: 77.22 }, end: { lat: 28.661, lng: 77.221 },
+      photos: ['data:image/jpeg;base64,' + Buffer.concat([JPEG, Buffer.from('gps-variant')]).toString('base64')],
+      photo_meta: [{ lat: 28.6605, lng: 77.2205, taken_at: '2026-09-19T05:00:00Z' }],
+    });
+    assert.equal(r.status, 201);
+    const seg = await r.json();
+    assert.equal(seg.photos[0].lat, 28.6605);
+    assert.equal(seg.photos[0].lng, 77.2205);
+    assert.equal(seg.photos[0].taken_at, '2026-09-19T05:00:00.000Z');
+    assert.equal(seg.photo_results[0].photo_lat, 28.6605);
+    assert.equal(seg.geometry.type, 'LineString', 'segments now carry a geometry');
+    assert.deepEqual(seg.geometry.coordinates, [[77.22, 28.66], [77.221, 28.661]], 'straight line until snapping exists');
+    const gj = await (await fetch(base + '/api/segments')).json();
+    const f = gj.features.find((x) => x.id === seg.id);
+    assert.deepEqual(f.geometry, seg.geometry);
+    assert.equal(f.properties.geometry.type, 'LineString');
+  });
+  test('EXIF GPS/time are read into the photo row and stripped from the stored file (orientation kept)', async () => {
+    const { jpegWithExif } = require('./helpers');
+    const { readExif } = require('../lib/exif');
+    const src = jpegWithExif({ orientation: 6 });
+    const fd = new FormData();
+    fd.append('name', 'EXIF walk'); fd.append('start', JSON.stringify({ lat: 28.667, lng: 77.228 })); fd.append('end', JSON.stringify({ lat: 28.663, lng: 77.23 }));
+    fd.append('photos', new Blob([src], { type: 'image/jpeg' }), 'exif.jpg');
+    const r = await fetch(base + '/api/segments', { method: 'POST', body: fd });
+    assert.equal(r.status, 201);
+    const seg = await r.json();
+    assert.ok(Math.abs(seg.photos[0].lat - 28.6672) < 1e-4, `lat ${seg.photos[0].lat}`);
+    assert.ok(Math.abs(seg.photos[0].lng - 77.2286) < 1e-4);
+    assert.equal(seg.photos[0].taken_at, '2026-09-19T10:30:00');
+    const stored = Buffer.from(await (await fetch(base + seg.photos[0].url)).arrayBuffer());
+    assert.ok(stored.length < src.length, 'metadata removed from the stored file');
+    const again = await readExif(stored);
+    assert.equal(again.lat, null); assert.equal(again.taken_at, null); assert.equal(again.orientation, 6);
+    const detail = await (await fetch(base + `/api/segments/${seg.id}`)).json();
+    assert.equal(detail.photos[0].taken_at, '2026-09-19T10:30:00');
+  });
+  test('bad photo_meta is ignored rather than rejected', async () => {
+    const r = await json('POST', '/api/segments', { name: 'bad meta', start: { lat: 28.66, lng: 77.22 }, end: { lat: 28.661, lng: 77.221 }, photos: ['data:image/jpeg;base64,' + JPEG.toString('base64')], photo_meta: 'nonsense' });
+    assert.equal(r.status, 201);
+    const seg = await r.json();
+    assert.equal(seg.photos[0].lat, null);
   });
   test('?stream=1 returns NDJSON: start, one photo line per photo, then segment', async () => {
     const fd = new FormData();

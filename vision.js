@@ -125,23 +125,33 @@ function validate(raw) {
   };
 }
 
+// The cache is the vision_calls table: the latest successful row for a hash carries the result,
+// so a hit is one indexed read and survives container rebuilds when the DB is on a volume.
+// JSON files left over from the hackathon build (data/vision-cache/<hash>.json) are imported
+// into the table the first time they are asked for, then never read again.
 function readCache(hash) {
   try {
+    const hit = db.cachedVisionResult(hash);
+    if (hit) return hit;
     const p = path.join(CACHE_DIR, `${hash}.json`);
-    if (fs.existsSync(p)) return JSON.parse(fs.readFileSync(p, 'utf8'));
+    if (fs.existsSync(p)) {
+      const legacy = JSON.parse(fs.readFileSync(p, 'utf8'));
+      if (legacy && Array.isArray(legacy.hazards)) {
+        db.recordVisionCall({ hash, model: legacy.meta?.model || MODEL, cached: true, latency_ms: 0, result: legacy });
+        console.log(`[vision] imported file cache for ${hash.slice(0, 8)} into vision_calls`);
+        return legacy;
+      }
+    }
   } catch (err) {
     console.warn('[vision] cache read failed', err.message);
   }
   return null;
 }
 
-function writeCache(hash, result) {
-  try {
-    fs.mkdirSync(CACHE_DIR, { recursive: true });
-    fs.writeFileSync(path.join(CACHE_DIR, `${hash}.json`), JSON.stringify(result, null, 2));
-  } catch (err) {
-    console.warn('[vision] cache write failed', err.message);
-  }
+/** Forget cached results for a hash (test-vision.js --no-cache). Usage rows are kept. */
+function forgetCache(hash) {
+  db.db.prepare(`UPDATE vision_calls SET result = NULL WHERE hash = ?`).run(hash);
+  try { fs.unlinkSync(path.join(CACHE_DIR, `${hash}.json`)); } catch { /* no legacy file */ }
 }
 
 async function callModel(imageB64, mediaType, repairHint) {
@@ -244,8 +254,7 @@ async function analysePhoto(input) {
         const parsed = JSON.parse(stripFences(out.text));
         const result = { ...validate(parsed), meta: { hash, cached: false, latency_ms: Date.now() - t0, model: MODEL, mock: false, attempts: attempt, usage } };
         console.log(`[vision] ${label} ${result.hazards.length} hazards in ${result.meta.latency_ms}ms (attempt ${attempt}, ${usage.input_tokens}+${usage.output_tokens} tokens)`);
-        db.recordVisionCall({ hash, model: MODEL, ...usage, latency_ms: Date.now() - tA });
-        writeCache(hash, result);
+        db.recordVisionCall({ hash, model: MODEL, ...usage, latency_ms: Date.now() - tA, result }); // this row is the cache entry
         return result;
       } catch (err) {
         lastErr = err;
@@ -262,4 +271,4 @@ async function analysePhoto(input) {
   return failed(lastErr ? lastErr.message : 'unknown failure');
 }
 
-module.exports = { analysePhoto, validate, stripFences, sha256, usage, MODEL, MOCK, CONCURRENCY, DAILY_BUDGET, BUDGET_ERROR };
+module.exports = { analysePhoto, validate, stripFences, sha256, usage, forgetCache, MODEL, MOCK, CONCURRENCY, DAILY_BUDGET, BUDGET_ERROR };

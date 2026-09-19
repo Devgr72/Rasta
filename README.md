@@ -62,8 +62,16 @@ it never reaches the browser.
 | `RASTA_MODEL` | `vision.js` | `claude-fable-5-1` | Model id for the vision audit |
 | `RASTA_MOCK_VISION` | `vision.js` | — | `1` forces deterministic mock results, no API calls |
 | `RASTA_DB` | `db.js` | `data/rasta.db` | SQLite file path (`:memory:` works for tests) |
-| `RASTA_UPLOAD_DIR` | `server.js` | `uploads/` | Where photo files are written |
-| `RASTA_VISION_CACHE_DIR` | `vision.js` | `data/vision-cache/` | Where vision results are cached by photo hash |
+| `RASTA_UPLOAD_DIR` | `server.js` | `uploads/` | Where photo files are written with the local storage driver |
+| `RASTA_VISION_CACHE_DIR` | `vision.js` | `data/vision-cache/` | Legacy hackathon file cache. Files found here are imported into the `vision_calls` table on first use |
+| `RASTA_STORAGE` | `lib/storage.js` | `local` | `local` (disk) or `s3` (AWS S3, Cloudflare R2, MinIO, any S3-compatible bucket) |
+| `RASTA_S3_BUCKET` | `lib/storage.js` | — | Bucket name (required for `s3`) |
+| `RASTA_S3_ENDPOINT` | `lib/storage.js` | AWS regional endpoint | Custom endpoint, e.g. `https://<account>.r2.cloudflarestorage.com` or `http://minio:9000`. Implies path-style URLs |
+| `RASTA_S3_REGION` | `lib/storage.js` | `auto` | Signing region (`auto` for R2) |
+| `RASTA_S3_ACCESS_KEY_ID` / `RASTA_S3_SECRET_ACCESS_KEY` | `lib/storage.js` | falls back to `AWS_*` | Credentials |
+| `RASTA_S3_PREFIX` | `lib/storage.js` | empty | Key prefix, e.g. `photos/` |
+| `RASTA_S3_PUBLIC_URL` | `lib/storage.js` | unset | Public/CDN base for photo URLs. Unset → the server proxies `/uploads/<name>` from the bucket so URLs are identical under both drivers |
+| `RASTA_S3_FORCE_PATH_STYLE` | `lib/storage.js` | auto | `1`/`0` to override path- vs virtual-host-style addressing |
 | `PORT` | `server.js` | `3000` | HTTP port |
 | `OSRM_BASE` | `server.js` | `https://router.project-osrm.org` | OSRM routing server base URL |
 | `RASTA_TILE_URL` | `server.js` | OSM tile URL template | Tile host; its origin is added to the CSP `img-src` |
@@ -106,10 +114,17 @@ All responses are JSON. Fields are only ever added, never renamed or removed.
 | `GET` | `/api/stats` | `{segments, hazards, km_covered, avg_score, total_cost_inr, wheelchair_ok_count, senior_ok_count, vision:{today, total, budget, budget_reached, concurrency}}` — token usage per UTC day and overall |
 | `GET` | `/api/standards` | The knowledge file |
 | `GET` | `/api/segments` | GeoJSON `FeatureCollection`; each feature's `properties` is a segment summary |
-| `GET` | `/api/segments/:id` | One segment with `photos[]`, `hazards[]` and `verdicts` |
-| `POST` | `/api/segments` | Create a segment. Multipart `name, start, end, photos[]` (up to 12), or JSON `{name, start, end, photos:[dataURL]}`. Runs vision on every photo in parallel, scores, persists, returns the graded segment with `201`. Add `?stream=1` for NDJSON: `{type:"start"}`, one `{type:"photo"}` per result as it lands, then `{type:"segment"}` |
+| `GET` | `/api/segments/:id` | One segment with `geometry`, `photos[]` (each with `url, lat, lng, taken_at`), `hazards[]` and `verdicts` |
+| `POST` | `/api/segments` | Create a segment. Multipart `name, start, end, photos[]` (up to 12), or JSON `{name, start, end, photos:[dataURL]}`. Runs vision on every photo in parallel, scores, persists, returns the graded segment with `201`. Optional `photo_meta` (JSON array of `{lat,lng,taken_at}` aligned with the photos). Add `?stream=1` for NDJSON: `{type:"start"}`, one `{type:"photo"}` per result as it lands, then `{type:"segment"}` |
 | `POST` | `/api/route` | `{from:{lat,lng}, to:{lat,lng}, persona}` → OSRM alternatives scored against walked segments, with `coverage`, `worst_hazard`, `persona_blockers` and `recommended_index`. Falls back to `data/demo-route.json` if OSRM fails or exceeds 3 s |
 | `DELETE` | `/api/segments/:id` | Takedown. Only exists when `RASTA_ADMIN_TOKEN` is set; needs `Authorization: Bearer <token>`. Cascades to photos and hazards and removes orphaned upload files |
+
+### Storage, cache and schema
+
+- **Schema migrations.** `db.js` holds an ordered array of SQL migrations and a `schema_version` table. Every boot applies whatever is missing inside a transaction. A database created by the hackathon build (tables but no version table) is baselined at version 1 and then upgraded. Migration 2 adds `vision_calls`, `segments.geometry` (GeoJSON LineString) and `photos.photo_lat / photo_lng / taken_at`.
+- **Photo files** go through `lib/storage.js`: local disk by default, or an S3-compatible bucket with `RASTA_STORAGE=s3`. The S3 driver signs requests itself (SigV4, verified against the AWS test vectors) so no SDK ships in the image. Photo URLs in API responses work under either driver.
+- **Vision cache** lives in the `vision_calls` table: the newest successful row for a photo hash carries the result, so a hit is one indexed read and survives container rebuilds when `data/` is on a volume. Old `data/vision-cache/*.json` files are imported the first time they are asked for.
+- **EXIF.** Before a photo is stored, GPS and `DateTimeOriginal` are read into the photo row, then all metadata segments are stripped from the file. Only a minimal Orientation tag is written back so rotated phone photos still display upright. Times are kept as the camera's wall-clock string (with the EXIF offset when present) rather than guessed into a timezone. Browsers strip EXIF when they resize, so the client may also send `photo_meta=[{lat,lng,taken_at}]` aligned with `photos[]`; EXIF wins when both exist.
 
 ### Protections
 

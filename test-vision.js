@@ -2,7 +2,7 @@
 // Usage: node test-vision.js <photo path> [--no-cache]
 const fs = require('fs');
 const path = require('path');
-const { analysePhoto, MODEL, MOCK } = require('./vision');
+const { analysePhoto, sha256, forgetCache, MODEL, MOCK } = require('./vision');
 
 (async () => {
   const file = process.argv[2];
@@ -10,11 +10,7 @@ const { analysePhoto, MODEL, MOCK } = require('./vision');
     console.error('usage: node test-vision.js <photo path> [--no-cache]');
     process.exit(1);
   }
-  if (process.argv.includes('--no-cache')) {
-    const { sha256 } = require('./vision');
-    const p = path.join(__dirname, 'data', 'vision-cache', `${sha256(fs.readFileSync(file))}.json`);
-    if (fs.existsSync(p)) fs.unlinkSync(p);
-  }
+  if (process.argv.includes('--no-cache')) forgetCache(sha256(fs.readFileSync(path.resolve(file))));
   console.log(`model: ${MODEL}${MOCK ? '  (MOCK MODE — no ANTHROPIC_API_KEY in .env)' : ''}`);
   const result = await analysePhoto(file);
   console.log(JSON.stringify(result, null, 2));

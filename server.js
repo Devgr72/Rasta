@@ -1,7 +1,6 @@
 // server.js — Express app, all routes. Static frontend from /public.
 require('dotenv').config({ quiet: true });
 const path = require('path');
-const fs = require('fs');
 const express = require('express');
 const multer = require('multer');
 const helmet = require('helmet');
@@ -10,6 +9,8 @@ const db = require('./db');
 const scoring = require('./scoring');
 const vision = require('./vision');
 const { imageSize } = require('./lib/image-size');
+const { createStorage } = require('./lib/storage');
+const exif = require('./lib/exif');
 
 const PORT = Number(process.env.PORT) || 3000;
 const UPLOAD_DIR = process.env.RASTA_UPLOAD_DIR || path.join(__dirname, 'uploads');
@@ -20,7 +21,10 @@ const MAX_FILES = 12;
 const MAX_FILE_MB = 8;
 const MAX_UPLOAD_MB = Math.max(1, Number(process.env.RASTA_MAX_UPLOAD_MB) || 40);   // all photos in one request
 const MAX_IMAGE_PX = Math.max(256, Number(process.env.RASTA_MAX_IMAGE_PX) || 6000); // longest side, decoded
-fs.mkdirSync(UPLOAD_DIR, { recursive: true });
+
+// Photo files: local disk by default, an S3-compatible bucket with RASTA_STORAGE=s3.
+const storage = createStorage(process.env, { uploadDir: UPLOAD_DIR });
+db.setUrlBuilder((f) => storage.url(f));
 
 const app = express();
 app.disable('x-powered-by');
@@ -73,7 +77,22 @@ const routeLimiter = limiter('RASTA_RATE_LIMIT_ROUTE', 120, 'route requests');
 
 app.use(express.json({ limit: `${MAX_UPLOAD_MB}mb` }));
 app.use(express.static(path.join(__dirname, 'public'), { extensions: ['html'] }));
-app.use('/uploads', express.static(UPLOAD_DIR, { maxAge: '7d', immutable: true }));
+if (storage.kind === 'local') {
+  app.use('/uploads', express.static(storage.dir, { maxAge: '7d', immutable: true }));
+} else {
+  // Same URL shape under S3 when no public bucket URL is configured: stream the object through.
+  app.get('/uploads/:file', async (req, res) => {
+    try {
+      const obj = await storage.get(path.basename(req.params.file));
+      if (!obj) return fail(res, 404, 'photo not found');
+      res.set('Content-Type', obj.contentType);
+      res.set('Cache-Control', 'public, max-age=604800, immutable');
+      if (obj.size) res.set('Content-Length', String(obj.size));
+      const { Readable } = require('stream');
+      (obj.body instanceof Readable ? obj.body : Readable.fromWeb(obj.body)).pipe(res);
+    } catch (err) { console.error('[uploads] proxy failed', err.message); fail(res, 502, 'photo storage unavailable'); }
+  });
+}
 app.use('/vendor/leaflet', express.static(path.join(__dirname, 'node_modules', 'leaflet', 'dist'), { maxAge: '30d', immutable: true }));
 
 const upload = multer({
@@ -131,23 +150,41 @@ function checkPhotoBuffers(buffers) {
   return null;
 }
 
-async function analyseAndSave({ name, start, end }, buffers, onPhoto) {
+// Optional per-photo hints from the client (the browser strips EXIF when it resizes, so it reads
+// GPS/time first and sends them alongside): photo_meta = [{lat, lng, taken_at}] aligned with photos.
+function parsePhotoMeta(body, n) {
+  let list = body.photo_meta;
+  if (typeof list === 'string') { try { list = JSON.parse(list); } catch { list = null; } }
+  if (!Array.isArray(list)) return Array.from({ length: n }, () => ({}));
+  return Array.from({ length: n }, (_, i) => {
+    const m = list[i] || {};
+    const p = parsePoint({ lat: m.lat, lng: m.lng });
+    const t = m.taken_at ? new Date(m.taken_at) : null;
+    return { lat: p ? p.lat : null, lng: p ? p.lng : null, taken_at: t && !Number.isNaN(t.getTime()) ? t.toISOString() : null };
+  });
+}
+
+async function analyseAndSave({ name, start, end }, buffers, onPhoto, hints = []) {
   // all photos in parallel — one API call each
   const results = await Promise.all(buffers.map(async (buf, i) => {
+    // Read GPS / capture time / orientation, then keep only the pixels (plus orientation).
+    const { meta: xf, buf: clean, stripped_bytes } = await exif.readAndStrip(buf);
+    const hint = hints[i] || {};
     let r;
     try {
-      r = await vision.analysePhoto(buf);
+      r = await vision.analysePhoto(buf); // hash of the original bytes keys the cache
     } catch (err) {
       console.error('[vision] unexpected throw', err);
       r = { ...vision.validate({ hazards: [] }), meta: { hash: vision.sha256(buf), error: err.message } };
     }
     const filename = `${r.meta.hash.slice(0, 16)}.${extFor(buf)}`;
-    const dest = path.join(UPLOAD_DIR, filename);
-    try { if (!fs.existsSync(dest)) fs.writeFileSync(dest, buf); } catch (err) { console.warn('[upload] write failed', err.message); }
+    try { await storage.put(filename, clean, `image/${extFor(buf) === 'jpg' ? 'jpeg' : extFor(buf)}`); }
+    catch (err) { console.warn('[upload] store failed', err.message); }
+    if (stripped_bytes > 0) console.log(`[upload] ${filename} stripped ${stripped_bytes} bytes of metadata${xf.lat != null ? ' (GPS kept in DB)' : ''}`);
     const photo = {
       index: i,
       filename,
-      url: `/uploads/${filename}`,
+      url: storage.url(filename),
       hash: r.meta.hash,
       hazards: r.hazards.map(scoring.enrichHazard).filter(Boolean),
       estimated_clear_width_m: r.estimated_clear_width_m,
@@ -157,6 +194,9 @@ async function analyseAndSave({ name, start, end }, buffers, onPhoto) {
       error: r.meta.error || null,
       latency_ms: r.meta.latency_ms,
       cached: !!r.meta.cached,
+      photo_lat: xf.lat ?? hint.lat ?? null,
+      photo_lng: xf.lng ?? hint.lng ?? null,
+      taken_at: xf.taken_at || hint.taken_at || null,
     };
     if (onPhoto) onPhoto(photo);
     return photo;
@@ -171,7 +211,7 @@ async function analyseAndSave({ name, start, end }, buffers, onPhoto) {
 app.get('/api/health', (_req, res) => {
   let budget_reached = false;
   try { budget_reached = vision.usage().budget_reached; } catch { /* stats are best-effort */ }
-  res.json({ ok: true, model: vision.MODEL, mock: vision.MOCK, concurrency: vision.CONCURRENCY, daily_token_budget: vision.DAILY_BUDGET || null, budget_reached });
+  res.json({ ok: true, model: vision.MODEL, mock: vision.MOCK, concurrency: vision.CONCURRENCY, daily_token_budget: vision.DAILY_BUDGET || null, budget_reached, storage: storage.kind, schema_version: db.MIGRATIONS.length });
 });
 
 app.get('/api/standards', (_req, res) => res.json(scoring.STANDARDS));
@@ -189,7 +229,7 @@ function requireAdmin(req, res, next) {
   if (given.length !== want.length || !require('crypto').timingSafeEqual(given, want)) return fail(res, 401, 'unauthorised');
   next();
 }
-app.delete('/api/segments/:id', requireAdmin, (req, res) => {
+app.delete('/api/segments/:id', requireAdmin, async (req, res) => {
   const id = Number(req.params.id);
   if (!Number.isInteger(id) || id <= 0) return fail(res, 400, 'bad id');
   try {
@@ -197,7 +237,7 @@ app.delete('/api/segments/:id', requireAdmin, (req, res) => {
     if (!r) return fail(res, 404, 'segment not found');
     let files_removed = 0;
     for (const f of r.orphaned_files) {
-      try { fs.unlinkSync(path.join(UPLOAD_DIR, path.basename(f))); files_removed++; } catch { /* already gone */ }
+      try { if (await storage.delete(f)) files_removed++; } catch (err) { console.warn('[admin] file delete failed', err.message); }
     }
     console.log(`[admin] deleted segment #${id}, removed ${files_removed} orphaned photo file(s)`);
     res.json({ ok: true, id, files_removed });
@@ -236,7 +276,8 @@ app.post('/api/segments', segmentLimiter, upload.array('photos', MAX_FILES), asy
     res.write(JSON.stringify({ type: 'start', photos: buffers.length, model: vision.MODEL, mock: vision.MOCK }) + '\n');
   }
   try {
-    const segment = await analyseAndSave({ name, start, end }, buffers, stream ? (p) => res.write(JSON.stringify({ type: 'photo', photo: p }) + '\n') : null);
+    const hints = parsePhotoMeta(body, buffers.length);
+    const segment = await analyseAndSave({ name, start, end }, buffers, stream ? (p) => res.write(JSON.stringify({ type: 'photo', photo: p }) + '\n') : null, hints);
     console.log(`[segment] #${segment.id} "${segment.name}" score ${segment.score}, ${segment.hazards.length} hazards`);
     if (stream) { res.write(JSON.stringify({ type: 'segment', segment }) + '\n'); return res.end(); }
     res.status(201).json(segment);

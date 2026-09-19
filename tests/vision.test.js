@@ -9,8 +9,9 @@ delete process.env.ANTHROPIC_API_KEY;
 
 const { test, describe, after } = require('node:test');
 const assert = require('node:assert/strict');
+const db = require('../db');
 const vision = require('../vision');
-const { stripFences, validate, analysePhoto, sha256, MOCK } = vision;
+const { stripFences, validate, analysePhoto, sha256, forgetCache, MOCK } = vision;
 
 after(() => { fs.rmSync(process.env.RASTA_VISION_CACHE_DIR, { recursive: true, force: true }); });
 
@@ -101,15 +102,42 @@ describe('analysePhoto (mock mode, temp cache)', () => {
     assert.deepEqual(a.hazards, b.hazards);
   });
 
-  test('a cache file for the hash is returned as a cache hit before mock or model run', async () => {
-    const buf = Buffer.from('another-photo');
+  test('a successful result stored in vision_calls is returned as a cache hit before mock or model run', async () => {
+    const buf = Buffer.from('db-cached-photo');
     const hash = sha256(buf);
-    const cached = { ...GOOD, meta: { hash, model: 'claude-fable-5-1', mock: false, latency_ms: 1234 } };
-    fs.writeFileSync(path.join(process.env.RASTA_VISION_CACHE_DIR, `${hash}.json`), JSON.stringify(cached));
+    db.recordVisionCall({ hash, model: 'claude-fable-5-1', input_tokens: 2000, output_tokens: 300, latency_ms: 4000, result: { ...GOOD, meta: { hash, model: 'claude-fable-5-1', mock: false } } });
     const r = await analysePhoto(buf);
     assert.equal(r.meta.cached, true);
     assert.equal(r.meta.model, 'claude-fable-5-1');
     assert.deepEqual(r.hazards, GOOD.hazards);
+    assert.equal(db.visionUsage().total.cache_hits, 1, 'the hit is recorded');
+  });
+
+  test('a legacy JSON cache file is imported into vision_calls on first use and then served from the table', async () => {
+    const buf = Buffer.from('another-photo');
+    const hash = sha256(buf);
+    const cached = { ...GOOD, meta: { hash, model: 'claude-fable-5-1', mock: false, latency_ms: 1234 } };
+    const file = path.join(process.env.RASTA_VISION_CACHE_DIR, `${hash}.json`);
+    fs.writeFileSync(file, JSON.stringify(cached));
+    const r = await analysePhoto(buf);
+    assert.equal(r.meta.cached, true);
+    assert.deepEqual(r.hazards, GOOD.hazards);
+    assert.deepEqual(db.cachedVisionResult(hash).hazards, GOOD.hazards, 'now in the table');
+    fs.unlinkSync(file);
+    const r2 = await analysePhoto(buf);
+    assert.equal(r2.meta.cached, true, 'served from the table after the file is gone');
+  });
+
+  test('forgetCache clears the stored result so the next call is fresh', async () => {
+    const buf = Buffer.from('forget-me');
+    const hash = sha256(buf);
+    db.recordVisionCall({ hash, model: 'claude-fable-5-1', result: { ...GOOD, meta: { hash } } });
+    assert.ok(db.cachedVisionResult(hash));
+    forgetCache(hash);
+    assert.equal(db.cachedVisionResult(hash), null);
+    const r = await analysePhoto(buf);
+    assert.equal(r.meta.cached, false);
+    assert.equal(r.meta.mock, true);
   });
 
   test('accepts a file path as well as a Buffer', async () => {
