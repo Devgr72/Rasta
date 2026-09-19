@@ -146,6 +146,7 @@ function migrate(conn, migrations = MIGRATIONS) {
 }
 
 migrate(db);
+repairLegacyGeometry(db);
 
 
 const q = {
@@ -271,8 +272,34 @@ let urlFor = (filename) => `/uploads/${filename}`;
 function setUrlBuilder(fn) { urlFor = fn; }
 
 function parseGeometry(row) {
-  if (row.geometry) { try { return JSON.parse(row.geometry); } catch { /* fall through */ } }
+  if (row.geometry) {
+    try {
+      const g = JSON.parse(row.geometry);
+      // rows written before geometry was unified stored a bare [[lng,lat],...] list
+      if (Array.isArray(g)) return { type: 'LineString', coordinates: g };
+      if (g && Array.isArray(g.coordinates)) return g;
+    } catch { /* fall through */ }
+  }
   return { type: 'LineString', coordinates: [[row.start_lng, row.start_lat], [row.end_lng, row.end_lat]] };
+}
+
+// One-off repair for rows written by the first OpenStreetMap import: wrap bare coordinate lists
+// as GeoJSON and widen the bbox to the whole polyline so the spatial pre-filter finds them.
+function repairLegacyGeometry(conn) {
+  const rows = conn.prepare(`SELECT id, geometry FROM segments WHERE geometry LIKE '[%'`).all();
+  if (!rows.length) return 0;
+  const upd = conn.prepare(`UPDATE segments SET geometry = @geometry, min_lat = @min_lat, max_lat = @max_lat, min_lng = @min_lng, max_lng = @max_lng WHERE id = @id`);
+  const tx = conn.transaction((list) => {
+    for (const r of list) {
+      let coords; try { coords = JSON.parse(r.geometry); } catch { continue; }
+      if (!Array.isArray(coords) || coords.length < 2) continue;
+      const lats = coords.map((c) => c[1]), lngs = coords.map((c) => c[0]);
+      upd.run({ id: r.id, geometry: JSON.stringify({ type: 'LineString', coordinates: coords }), min_lat: Math.min(...lats), max_lat: Math.max(...lats), min_lng: Math.min(...lngs), max_lng: Math.max(...lngs) });
+    }
+  });
+  tx(rows);
+  console.log(`[db] repaired geometry on ${rows.length} legacy segment(s)`);
+  return rows.length;
 }
 
 function rowToSegment(row) {
