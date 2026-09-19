@@ -671,26 +671,100 @@
   }
 
   // ---------- route ----------
-  const rptEls = { a: $('[data-rpt="a"]'), b: $('[data-rpt="b"]') };
+  // A and B can be typed as place names (geocoded on Search/Enter) or tapped on the map. Names for
+  // tapped points come from a reverse lookup so the inputs always read like a journey, not coordinates.
+  const geoInputs = { a: $('#geo-a'), b: $('#geo-b') };
+  state.routeNames = { a: null, b: null }; // { name, lat, lng } for each end
+  state.pendingB = null;                    // B chosen before A exists
+  const sameSpot = (n, p) => n && p && haversine(n, p) < 5;
+  const fmtDist = (m) => (m >= 1000 ? `${(m / 1000).toFixed(1)} km` : `${Math.round(m)} m`);
+
   function onRoutePoints(points) {
+    const key = JSON.stringify(points.map((p) => [p.lat.toFixed(6), p.lng.toFixed(6)]));
+    const changed = key !== state.routeKey; state.routeKey = key;
     state.routePoints = points;
-    ['a', 'b'].forEach((k, i) => { const p = points[i]; rptEls[k].textContent = p ? fmtLL(p) : (i ? t('r.to') : t('r.from')); rptEls[k].parentElement.classList.toggle('is-set', !!p); });
-    $('#route-hint').textContent = points.length === 0 ? t('r.hint0') : points.length === 1 ? t('r.hint1') : t('r.hint2');
+    if (points.length === 1 && state.pendingB) { const b = state.pendingB; state.pendingB = null; M.setPicks([points[0], { lat: b.lat, lng: b.lng }]); return; }
+    ['a', 'b'].forEach((k, i) => {
+      const p = points[i]; const inp = geoInputs[k]; const row = inp.closest('.geo-row');
+      row.classList.toggle('is-set', !!p);
+      if (!p) { if (!(k === 'b' && state.pendingB)) { inp.value = ''; state.routeNames[k] = null; } return; }
+      if (sameSpot(state.routeNames[k], p)) { inp.value = state.routeNames[k].name; return; }
+      state.routeNames[k] = null; inp.value = fmtLL(p);
+      reverseName(k, p);
+    });
+    $$('.geo-results').forEach((el) => { el.hidden = true; });
+    $('#route-hint').textContent = points.length === 0 ? t('r.hint0') : points.length === 1 ? (state.pendingB ? t('r.setA') : t('r.hint1')) : t('r.hint2');
     $('#btn-find-routes').disabled = points.length !== 2;
     $('#route-note').textContent = points.length === 2 ? t('r.note.apart', { km: (haversine(points[0], points[1]) / 1000).toFixed(1) }) : t('r.note.pick');
+    $('#route-note').classList.remove('is-error');
+    if (changed) { // moving A or B invalidates the comparison; a language switch or tab change does not
+      stopWalking();
+      if (state.routes) { M.clearRoutes(); $('#route-results').innerHTML = ''; state.routes = null; }
+    }
   }
-  $('#btn-route-clear').addEventListener('click', () => { M.clearPicks(); onRoutePoints([]); M.clearRoutes(); $('#route-results').innerHTML = ''; state.routes = null; });
-  $('#btn-route-demo').addEventListener('click', () => { M.setPicks([{ lat: 28.6672, lng: 77.2286 }, { lat: 28.6598, lng: 77.2288 }]); M.map.flyTo([28.6635, 77.2290], 15); });
+  const reverseTimers = {};
+  function reverseName(k, p) {
+    clearTimeout(reverseTimers[k]);
+    reverseTimers[k] = setTimeout(async () => {
+      try {
+        const r = await api(`/api/geocode/reverse?lat=${p.lat}&lng=${p.lng}&lang=${I.lang}`);
+        const cur = state.routePoints[k === 'a' ? 0 : 1];
+        if (r.place && cur && sameSpot(cur, p)) { state.routeNames[k] = { name: r.place.name, lat: p.lat, lng: p.lng }; geoInputs[k].value = r.place.name; }
+      } catch { /* coordinates stay */ }
+    }, 350);
+  }
+  async function searchPlace(k) {
+    const inp = geoInputs[k]; const q = inp.value.trim(); const box = $(`#geo-results-${k}`); const btn = $(`[data-geo-go="${k}"]`);
+    if (q.length < 2 || (state.routeNames[k] && state.routeNames[k].name === q)) return;
+    btn.classList.add('is-busy'); btn.disabled = true; box.hidden = false; box.innerHTML = `<div class="geo-empty">${t('r.searching')}</div>`;
+    try {
+      const c = M.map.getCenter();
+      const r = await api(`/api/geocode?q=${encodeURIComponent(q)}&lat=${c.lat}&lng=${c.lng}&lang=${I.lang}`);
+      if (!r.results.length) { box.innerHTML = `<div class="geo-empty">${esc(t('r.noresults', { q }))}</div>`; return; }
+      box.innerHTML = r.results.map((p, i) => `<button type="button" role="option" data-pick="${i}">${esc(p.name)}<small>${esc(p.display_name)}</small></button>`).join('');
+      $$('[data-pick]', box).forEach((b) => b.addEventListener('click', () => pickPlace(k, r.results[Number(b.dataset.pick)])));
+      if (r.results.length === 1) pickPlace(k, r.results[0]);
+    } catch (err) { box.innerHTML = `<div class="geo-empty">${esc(t('r.geo.failed', { err: err.message }))}</div>`; }
+    finally { btn.classList.remove('is-busy'); btn.disabled = false; }
+  }
+  function pickPlace(k, place) {
+    const P = { lat: place.lat, lng: place.lng };
+    state.routeNames[k] = { name: place.name, lat: P.lat, lng: P.lng };
+    geoInputs[k].value = place.name;
+    $(`#geo-results-${k}`).hidden = true;
+    const pts = state.routePoints.slice();
+    if (k === 'a') { pts[0] = P; if (state.pendingB) { pts[1] = { lat: state.pendingB.lat, lng: state.pendingB.lng }; state.pendingB = null; } }
+    else if (pts.length === 0) { state.pendingB = { ...P, name: place.name }; geoInputs.b.closest('.geo-row').classList.add('is-set'); $('#route-hint').textContent = t('r.setA'); M.map.flyTo([P.lat, P.lng], 15); return; }
+    else pts[1] = P;
+    M.setPicks(pts);
+    if (pts.length === 2) M.map.flyToBounds(L.latLngBounds(pts.map((p) => [p.lat, p.lng])).pad(0.3), { duration: 0.8 });
+    else M.map.flyTo([P.lat, P.lng], 15);
+  }
+  ['a', 'b'].forEach((k) => {
+    geoInputs[k].addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); searchPlace(k); } if (e.key === 'Escape') $(`#geo-results-${k}`).hidden = true; });
+    $(`[data-geo-go="${k}"]`).addEventListener('click', () => searchPlace(k));
+  });
+  $('#btn-route-swap').addEventListener('click', () => {
+    const pts = state.routePoints.slice().reverse();
+    const names = state.routeNames; state.routeNames = { a: names.b, b: names.a };
+    if (pts.length === 2) M.setPicks(pts);
+  });
+  $('#btn-route-clear').addEventListener('click', () => { state.pendingB = null; state.routeNames = { a: null, b: null }; M.clearPicks(); onRoutePoints([]); M.clearRoutes(); $('#route-results').innerHTML = ''; state.routes = null; });
+  $('#btn-route-demo').addEventListener('click', () => {
+    state.routeNames = { a: { name: 'Kashmere Gate Metro, Gate 3', lat: 28.6672, lng: 77.2286 }, b: { name: 'Old Delhi Railway Station', lat: 28.6598, lng: 77.2288 } };
+    M.setPicks([{ lat: 28.6672, lng: 77.2286 }, { lat: 28.6598, lng: 77.2288 }]); M.map.flyTo([28.6635, 77.2290], 15);
+  });
   $$('.persona-opt').forEach((b) => b.addEventListener('click', () => {
     state.persona = b.dataset.persona;
     $$('.persona-opt').forEach((x) => { const on = x === b; x.classList.toggle('is-active', on); x.setAttribute('aria-checked', on); x.setAttribute('tabindex', on ? '0' : '-1'); });
-    if (state.routes && state.routePoints.length === 2) findRoutes();
+    // times for every persona are already on each card: just re-render with the new highlight and best route
+    if (state.routes) { state.routes.persona = state.persona; state.routes.recommended_index = state.routes.best_for ? state.routes.best_for[state.persona] : state.routes.recommended_index; renderRoutes(state.routes); }
   }));
 
   async function findRoutes() {
     if (state.routePoints.length !== 2) return;
     const btn = $('#btn-find-routes'); btn.disabled = true; btn.classList.add('is-busy');
-    $('#route-note').textContent = t('r.note.asking');
+    $('#route-note').textContent = t('r.note.asking'); $('#route-note').classList.remove('is-error');
     try {
       const data = await api('/api/route', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ from: state.routePoints[0], to: state.routePoints[1], persona: state.persona }) });
       state.routes = data;
@@ -703,31 +777,89 @@
   }
   $('#btn-find-routes').addEventListener('click', findRoutes);
 
+  const PERSONAS = ['walk', 'wheelchair', 'senior'];
   function renderRoutes(data) {
+    stopWalking();
     const host = $('#route-results'); host.innerHTML = '';
     if (data.warning) host.insertAdjacentHTML('beforeend', `<div class="route-warn">${esc(data.warning)}</div>`);
     M.drawRoutes(data.routes, { recommended: data.recommended_index, onClick: (i) => activateRoute(i) });
+    const best = data.best_for || {};
     const order = data.routes.slice().sort((a, b) => (a.index === data.recommended_index ? -1 : b.index === data.recommended_index ? 1 : (b.score ?? -1) - (a.score ?? -1)));
     order.forEach((r, k) => {
       const covered = r.coverage >= 40 && r.score != null;
-      const card = document.createElement('button');
-      card.type = 'button'; card.className = `rc${r.index === data.recommended_index ? ' is-rec' : ''}`; card.dataset.index = r.index;
+      const times = r.times || {}; const passable = r.passable || {};
+      const card = document.createElement('div');
+      card.className = `rc${r.index === data.recommended_index ? ' is-rec' : ''}`; card.dataset.index = r.index; card.tabIndex = 0; card.setAttribute('role', 'button');
+      const timesHtml = PERSONAS.map((p) => `<span class="rt${p === state.persona ? ' is-me' : ''}${passable[p] === false ? ' is-blocked' : ''}" title="${esc(t(`r.persona.${p}`))}">${PERSONA_ICON[p]}${passable[p] === false ? t('r.blocked.short') : t('r.min', { n: times[p] ?? r.duration_min })}${best[p] === r.index && data.routes.length > 1 ? '<i class="star" aria-hidden="true">★</i>' : ''}</span>`).join('');
+      const problems = r.problems || [];
+      const problemsHtml = problems.length
+        ? `<details class="rc-problems"><summary>${r.problem_count === 1 ? t('r.problem') : t('r.problems', { n: r.problem_count })}</summary><ol>${problems.map((h, j) => `<li><button type="button" data-prob="${j}"><span class="pn sev-${h.severity}">${j + 1}</span><span><b>${esc(typeLabel(h.type_id) || h.label_en)}</b> · ${h.severity}/5<br><small>${esc(h.segment_name)}${h.note ? ' — ' + esc(h.note) : ''}</small></span></button></li>`).join('')}</ol></details>`
+        : covered ? `<div class="rc-problems"><span class="none">${t('r.noproblems')}</span></div>` : '';
       card.innerHTML = `<div class="rc-score${covered ? '' : ' nodata'}" style="--c:${M.scoreColor(covered ? r.score : null)}">${covered ? r.score : t('r.nodata')}</div>
         <div>
-          <div class="rc-head"><b>${data.routes.length === 1 ? t('r.only') : r.index === data.recommended_index ? t('r.rec') : t('r.n', { n: r.index + 1 })}</b>${r.index === data.recommended_index && covered && data.routes.length > 1 ? `<span class="rc-rec">${t('r.best')}</span>` : ''}</div>
-          <div class="rc-meta">${t('r.meta', { km: (r.distance_m / 1000).toFixed(1), min: r.duration_min, cov: r.coverage })}</div>
+          <div class="rc-head"><b>${data.routes.length === 1 ? t('r.only') : r.index === data.recommended_index ? t('r.rec') : t('r.n', { n: r.index + 1 })}</b>${r.index === data.recommended_index && covered && data.routes.length > 1 ? `<span class="rc-rec">${esc(t('r.best.for', { persona: t(`r.persona.${state.persona}`) }))}</span>` : ''}</div>
+          <div class="rc-meta">${t('r.meta', { km: (r.distance_m / 1000).toFixed(1), min: times[state.persona] ?? r.duration_min, cov: r.coverage })}</div>
+          <div class="rc-times" title="${esc(t('r.times.title'))}">${timesHtml}</div>
           <div class="rc-cov" role="img" aria-label="${r.coverage}%"><i style="--w:${r.coverage}%"></i></div>
           ${r.worst_hazard ? `<div class="rc-worst">${t('r.worst', { label: esc(typeLabel(r.worst_hazard.type_id) || r.worst_hazard.label_en), sev: r.worst_hazard.severity, seg: esc(r.worst_hazard.segment_name) })}</div>` : covered ? `<div class="rc-worst">${t('r.clean')}</div>` : `<div class="rc-worst">${t('r.toolittle')}</div>`}
-          ${r.persona_blockers.length ? `<div class="rc-block">${t('r.blocked', { persona: t(`r.persona.${state.persona}`), seg: esc(r.persona_blockers[0].name) })}${r.persona_blockers.length > 1 ? t('r.more', { n: r.persona_blockers.length - 1 }) : ''}</div>` : ''}
+          ${(r.blockers && r.blockers[state.persona] || r.persona_blockers).length ? `<div class="rc-block">${t('r.blocked', { persona: t(`r.persona.${state.persona}`), seg: esc((r.blockers && r.blockers[state.persona] || r.persona_blockers)[0].name) })}${(r.blockers && r.blockers[state.persona] || r.persona_blockers).length > 1 ? t('r.more', { n: (r.blockers && r.blockers[state.persona] || r.persona_blockers).length - 1 }) : ''}</div>` : ''}
+          ${problemsHtml}
+          <div class="rc-actions"><button type="button" class="primary rc-start">${t('r.start')}</button></div>
+          <div class="rc-walk"><div class="rc-progress"><i></i></div><div class="rc-walk-text"></div><div class="rc-next"></div><button type="button" class="ghost rc-stop">${t('r.stop')}</button></div>
         </div>`;
-      card.addEventListener('click', () => activateRoute(r.index));
+      const activate = () => activateRoute(r.index);
+      card.addEventListener('click', (e) => { if (e.target.closest('button, summary, details')) return; activate(); });
+      card.addEventListener('keydown', (e) => { if ((e.key === 'Enter' || e.key === ' ') && e.target === card) { e.preventDefault(); activate(); } });
+      $$('[data-prob]', card).forEach((b) => b.addEventListener('click', (e) => { e.stopPropagation(); activateRoute(r.index); const j = Number(b.dataset.prob); M.highlightRouteHazard(j, true); $$('[data-prob]', card).forEach((x) => x.classList.toggle('is-hot', x === b)); }));
+      card.querySelector('.rc-start').addEventListener('click', (e) => { e.stopPropagation(); activateRoute(r.index); startWalking(r, card); });
+      card.querySelector('.rc-stop').addEventListener('click', (e) => { e.stopPropagation(); stopWalking(); });
       host.appendChild(card);
       setTimeout(() => card.classList.add('is-in'), reduceMotion ? 0 : 120 * k + 200);
     });
+    if (data.recommended_index != null) activateRoute(data.recommended_index, { quiet: true });
   }
-  function activateRoute(i) {
+  function activateRoute(i, { quiet } = {}) {
+    if (M.isWalking() && state.walkingIndex !== i) stopWalking();
     $$('.rc').forEach((c) => c.classList.toggle('is-active', Number(c.dataset.index) === i));
     M.highlightRoute(i);
+    const r = state.routes && state.routes.routes.find((x) => x.index === i);
+    M.drawRouteHazards(r ? r.problems : [], { onClick: (j) => { const card = $(`.rc[data-index="${i}"]`); const btn = card && $$('[data-prob]', card)[j]; if (btn) { card.querySelector('.rc-problems')?.setAttribute('open', ''); btn.click(); btn.scrollIntoView({ block: 'nearest' }); } } });
+    if (!quiet && isPhone()) setSheet(false);
+  }
+
+  // "Start walking": zoom to A and follow the route at the chosen persona's pace, calling out problems.
+  function startWalking(r, card) {
+    const speed = (state.routes && state.routes.speeds_mps && state.routes.speeds_mps[state.persona]) || 1.35;
+    const problems = r.problems || [];
+    const text = card.querySelector('.rc-walk-text'); const next = card.querySelector('.rc-next'); const bar = card.querySelector('.rc-progress i');
+    state.walkingIndex = r.index;
+    card.classList.add('is-walking');
+    if (isPhone()) setSheet(false);
+    const nextProblem = (pos) => {
+      let bestP = null, bestD = Infinity;
+      for (const [j, p] of problems.entries()) { if (seen.has(j) || p.lat == null) continue; const d = haversine(pos, p); if (d < bestD) { bestD = d; bestP = p; } }
+      return bestP ? { p: bestP, d: bestD } : null;
+    };
+    const seen = new Set();
+    const w = M.walkAlong(r.geometry.coordinates, {
+      speedMps: speed, problems,
+      onProgress: ({ done_m, total_m, fraction, remaining_s }) => {
+        bar.style.setProperty('--w', `${Math.round(fraction * 100)}%`);
+        text.innerHTML = t('r.walk.progress', { done: fmtDist(done_m), total: fmtDist(total_m), min: Math.max(1, Math.round(remaining_s / 60)), persona: t(`r.speed.${state.persona}`) });
+        const coords = r.geometry.coordinates; const idx = Math.min(coords.length - 1, Math.floor(fraction * (coords.length - 1)));
+        const n = nextProblem({ lng: coords[idx][0], lat: coords[idx][1] });
+        next.className = `rc-next${n ? '' : ' none'}`;
+        next.textContent = n ? t('r.next', { label: typeLabel(n.p.type_id) || n.p.label_en, m: Math.round(n.d / 10) * 10 }) : t('r.next.none');
+      },
+      onNear: (j, p) => { seen.add(j); M.highlightRouteHazard(j); toast(t('r.near', { label: typeLabel(p.type_id) || p.label_en, sev: p.severity, seg: p.segment_name }), p.severity >= 4 ? 'error' : ''); },
+      onDone: ({ problems_seen }) => { toast(t('r.arrived', { n: problems_seen }), 'ok'); card.classList.remove('is-walking'); state.walkingIndex = null; M.highlightRouteHazard(-1); },
+    });
+    if (!w) card.classList.remove('is-walking');
+  }
+  function stopWalking() {
+    M.stopWalk();
+    $$('.rc.is-walking').forEach((c) => c.classList.remove('is-walking'));
+    state.walkingIndex = null;
   }
 
   // ---------- open data import ----------

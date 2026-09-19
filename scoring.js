@@ -326,7 +326,46 @@ function scoreRoute(coords, segments, { sampleEveryM = 25, radiusM = 40 } = {}) 
   return { score, coverage, samples: samples.length, segments: [...hit.values()] };
 }
 
+// ---------- per-persona travel time ----------
+// Free walking speeds (m/s): a steady adult, a manual wheelchair on a reasonable surface, an older
+// adult. Each hazard whose persona risk is 3+ costs a detour/care penalty proportional to severity.
+const SPEED_MPS = { walk: 1.35, wheelchair: 1.0, senior: 0.9 };
+const HAZARD_PENALTY_S = { walk: 8, wheelchair: 25, senior: 20 }; // per severity point, risk >= 3 only
+
+/**
+ * Minutes for each persona to travel `distanceM` past `hazards` (enriched, with .risk and .severity).
+ * Returns { walk, wheelchair, senior } in whole minutes.
+ */
+function personaTimes(distanceM, hazards = []) {
+  const out = {};
+  for (const k of ['walk', 'wheelchair', 'senior']) {
+    let s = distanceM / SPEED_MPS[k];
+    for (const h of hazards) {
+      const risk = h.risk ? h.risk[k] : (TYPES[h.type_id] ? { walk: TYPES[h.type_id].base_severity, senior: TYPES[h.type_id].senior_risk, wheelchair: TYPES[h.type_id].wheelchair_risk }[k] : 0);
+      if (risk >= 3) s += (h.severity || 3) * HAZARD_PENALTY_S[k];
+    }
+    out[k] = Math.max(1, Math.round(s / 60));
+  }
+  return out;
+}
+
+/**
+ * Pick the best route index for a persona: the highest score among routes with ≥40% coverage that
+ * are passable for that persona; then any ≥40% coverage route by score; then the quickest.
+ * routes: [{ index, score, coverage, passable: {persona: bool}, times: {persona: min}, distance_m }]
+ */
+function bestRouteFor(routes, persona) {
+  if (!routes.length) return null;
+  const byScore = (a, b) => (b.score ?? -1) - (a.score ?? -1) || a.times[persona] - b.times[persona] || a.distance_m - b.distance_m;
+  const covered = routes.filter((r) => r.coverage >= 40 && r.score != null);
+  const passable = covered.filter((r) => !r.passable || r.passable[persona]);
+  if (passable.length) return passable.slice().sort(byScore)[0].index;
+  if (covered.length) return covered.slice().sort(byScore)[0].index;
+  return routes.slice().sort((a, b) => a.times[persona] - b.times[persona] || a.distance_m - b.distance_m)[0].index;
+}
+
 module.exports = {
   haversine, polylineLength, bboxOf, padBbox, pointToPolylineM, segmentCoords, distanceToLine,
+  personaTimes, bestRouteFor, SPEED_MPS,
   enrichHazard, scoreFromHazards, personaVerdicts, gradeSegment, scoreRoute, tagsToObservation, TYPES, STANDARDS,
 };

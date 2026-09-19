@@ -12,6 +12,7 @@ const { imageSize } = require('./lib/image-size');
 const { createStorage } = require('./lib/storage');
 const exif = require('./lib/exif');
 const osrm = require('./lib/osrm');
+const geocode = require('./lib/geocode');
 const { logger, httpLogger } = require('./lib/log');
 const { createSentry } = require('./lib/sentry');
 const pkg = require('./package.json');
@@ -276,6 +277,7 @@ app.get('/api/config', (_req, res) => res.json({
   tile_url: TILE_URL,
   tile_attribution: TILE_ATTRIBUTION,
   routing: osrm.OSRM_BASE.includes('router.project-osrm.org') ? 'public-demo' : 'configured',
+  geocoder: geocode.BASE.includes('nominatim.openstreetmap.org') ? 'public-nominatim' : 'configured',
   max_photos: MAX_FILES,
   max_image_px: MAX_IMAGE_PX,
   max_upload_mb: MAX_UPLOAD_MB,
@@ -557,10 +559,23 @@ app.post('/api/route', routeLimiter, async (req, res) => {
   // radius) are loaded, so scoring stays fast at ten thousand segments.
   const allCoords = result.routes.flatMap((r) => r.geometry.coordinates);
   const segments = db.segmentsInBbox(scoring.padBbox(scoring.bboxOf(allCoords), ROUTE_RADIUS_M));
+  const PERSONAS = ['walk', 'wheelchair', 'senior'];
   const routes = result.routes.map((r, i) => {
     const scored = scoring.scoreRoute(r.geometry.coordinates, segments, { radiusM: ROUTE_RADIUS_M });
-    const hazardsOn = scored.segments.flatMap((s) => db.getSegment(s.id).hazards.map((h) => ({ ...h, segment_name: s.name })));
-    const worst = hazardsOn.sort((a, b) => b.severity - a.severity)[0] || null;
+    // every hazard on the matched segments, placed at its segment's midpoint so the UI can pin it
+    const hazardsOn = scored.segments.flatMap((s) => {
+      const c = scoring.segmentCoords(s);
+      const mid = c[Math.floor(c.length / 2)];
+      return db.getSegment(s.id).hazards.map((h) => {
+        const type = scoring.TYPES[h.type_id] || {};
+        return {
+          ...h, segment_id: s.id, segment_name: s.name, lat: mid[1], lng: mid[0],
+          label_en: type.label_en || h.type_id, label_hi: type.label_hi || '',
+          risk: { walk: type.base_severity || 0, senior: type.senior_risk || 0, wheelchair: type.wheelchair_risk || 0 },
+        };
+      });
+    }).sort((a, b) => b.severity - a.severity || (b.risk[persona] || 0) - (a.risk[persona] || 0));
+    const worst = hazardsOn[0] || null;
     const personaFails = scored.segments.filter((s) => !s.verdicts[persona].ok);
     return {
       index: i,
@@ -571,14 +586,35 @@ app.post('/api/route', routeLimiter, async (req, res) => {
       coverage: scored.coverage,
       segments: scored.segments.map((s) => ({ id: s.id, name: s.name, score: s.score, verdict: s.verdicts[persona] })),
       persona_blockers: personaFails.map((s) => ({ id: s.id, name: s.name, reason: s.verdicts[persona].reason })),
-      worst_hazard: worst ? { type_id: worst.type_id, severity: worst.severity, note: worst.note, segment_name: worst.segment_name, label_en: scoring.TYPES[worst.type_id]?.label_en } : null,
+      worst_hazard: worst ? { type_id: worst.type_id, severity: worst.severity, note: worst.note, segment_name: worst.segment_name, label_en: worst.label_en } : null,
+      // per-persona travel time (free speed + detour penalties for hazards that affect that persona)
+      times: scoring.personaTimes(r.distance, hazardsOn),
+      passable: Object.fromEntries(PERSONAS.map((k) => [k, !scored.segments.some((s) => !s.verdicts[k].ok)])),
+      blockers: Object.fromEntries(PERSONAS.map((k) => [k, scored.segments.filter((s) => !s.verdicts[k].ok).map((s) => ({ id: s.id, name: s.name, reason: s.verdicts[k].reason }))])),
+      problems: hazardsOn.slice(0, 12).map((h) => ({ id: h.id, type_id: h.type_id, label_en: h.label_en, label_hi: h.label_hi, severity: h.severity, note: h.note, authority: h.authority, segment_id: h.segment_id, segment_name: h.segment_name, lat: h.lat, lng: h.lng, risk: h.risk })),
+      problem_count: hazardsOn.length,
     };
   });
-  // recommended: highest score with at least 40% coverage; else most covered
-  const eligible = routes.filter((r) => r.coverage >= 40 && r.score != null);
-  const pool = eligible.length ? eligible : routes;
-  const recommended = pool.slice().sort((a, b) => (b.score ?? -1) - (a.score ?? -1) || b.coverage - a.coverage || a.distance_m - b.distance_m)[0];
-  res.json({ ok: true, source, warning, persona, routes, recommended_index: recommended ? recommended.index : null, candidates: segments.length });
+  // best route per persona: highest score with ≥40% coverage and passable; recommended = the asked-for persona
+  const best_for = Object.fromEntries(PERSONAS.map((k) => [k, scoring.bestRouteFor(routes, k)]));
+  res.json({ ok: true, source, warning, persona, routes, recommended_index: best_for[persona], best_for, speeds_mps: scoring.SPEED_MPS, candidates: segments.length });
+});
+
+// ---------- geocoding: place names → coordinates for the Route tab ----------
+app.get('/api/geocode', routeLimiter, async (req, res) => {
+  const q = String(req.query.q || '').trim();
+  if (q.length < 2) return fail(res, 400, 'q must be at least 2 characters');
+  const near = parsePoint({ lat: req.query.lat, lng: req.query.lng });
+  try {
+    const results = await geocode.search(q, { near: near || undefined, limit: 6, lang: req.query.lang === 'hi' ? 'hi' : 'en' });
+    res.json({ ok: true, query: q, results });
+  } catch (err) { console.warn('[geocode]', err.message); fail(res, 502, `place search unavailable: ${err.message}`); }
+});
+app.get('/api/geocode/reverse', routeLimiter, async (req, res) => {
+  const p = parsePoint({ lat: req.query.lat, lng: req.query.lng });
+  if (!p) return fail(res, 400, 'lat and lng required');
+  try { res.json({ ok: true, place: await geocode.reverse(p.lat, p.lng, { lang: req.query.lang === 'hi' ? 'hi' : 'en' }) }); }
+  catch (err) { fail(res, 502, `reverse lookup unavailable: ${err.message}`); }
 });
 
 // ---------- boot ----------

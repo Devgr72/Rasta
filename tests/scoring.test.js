@@ -205,6 +205,35 @@ describe('scoreRoute', () => {
   });
 });
 
+describe('personaTimes / bestRouteFor', () => {
+  const { personaTimes, bestRouteFor, SPEED_MPS } = scoring;
+  test('free speeds differ per persona and round to whole minutes', () => {
+    const t = personaTimes(1000, []);
+    assert.equal(t.walk, Math.round(1000 / SPEED_MPS.walk / 60));
+    assert.ok(t.wheelchair > t.walk && t.senior > t.wheelchair, JSON.stringify(t));
+    assert.deepEqual(personaTimes(10, []), { walk: 1, wheelchair: 1, senior: 1 }, 'never below a minute');
+  });
+  test('hazards add time only for personas they affect (risk ≥ 3), scaled by severity', () => {
+    const base = personaTimes(1000, []);
+    const tactile = personaTimes(1000, [hz('missing_tactile', 5)]); // risks 2/2/1 → nobody slowed
+    assert.deepEqual(tactile, base);
+    const drain = personaTimes(1000, [hz('open_drain', 5)]); // 5/5/5
+    assert.ok(drain.walk > base.walk && drain.wheelchair > base.wheelchair && drain.senior > base.senior);
+    assert.ok(drain.wheelchair - base.wheelchair >= drain.walk - base.walk, 'wheelchair pays the biggest detour');
+    const raw = personaTimes(1000, [{ type_id: 'open_drain', severity: 5 }]); // un-enriched hazard, risk looked up from TYPES
+    assert.deepEqual(raw, drain);
+  });
+  test('bestRouteFor prefers a passable, well-covered, high-scoring route; falls back sensibly', () => {
+    const mk = (index, score, coverage, passable, times, distance_m) => ({ index, score, coverage, passable: { walk: true, wheelchair: passable, senior: true }, times: { walk: times, wheelchair: times + 3, senior: times + 2 }, distance_m });
+    const routes = [mk(0, 80, 60, false, 12, 1000), mk(1, 55, 70, true, 15, 1200), mk(2, null, 10, true, 9, 800)];
+    assert.equal(bestRouteFor(routes, 'walk'), 0, 'highest score, passable on foot');
+    assert.equal(bestRouteFor(routes, 'wheelchair'), 1, 'route 0 is blocked for wheelchairs');
+    assert.equal(bestRouteFor([mk(0, 80, 60, false, 12, 1000), mk(1, null, 5, true, 9, 700)], 'wheelchair'), 0, 'no passable covered route → best covered route');
+    assert.equal(bestRouteFor([mk(0, null, 5, true, 12, 1000), mk(1, null, 8, true, 9, 700)], 'senior'), 1, 'nothing covered → quickest');
+    assert.equal(bestRouteFor([], 'walk'), null);
+  });
+});
+
 describe('geometry helpers', () => {
   const { polylineLength, bboxOf, padBbox, pointToPolylineM, segmentCoords } = scoring;
   test('polylineLength sums haversine legs', () => {

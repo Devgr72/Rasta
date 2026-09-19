@@ -240,7 +240,7 @@
   // ---------- routes ----------
   const routeLayer = L.layerGroup().addTo(map);
   let routeLines = [];
-  function clearRoutes() { routeLayer.clearLayers(); routeLines = []; }
+  function clearRoutes() { routeLayer.clearLayers(); routeLines = []; if (typeof clearRouteHazards === 'function') clearRouteHazards(); if (typeof stopWalk === 'function') stopWalk(); }
 
   function drawRoutes(routes, { onClick, recommended } = {}) {
     clearRoutes();
@@ -275,6 +275,69 @@
     routeLines.forEach((l, j) => { l.getElement()?.classList.toggle('is-dim', i != null && j !== i); l.setStyle({ weight: j === i ? 8 : 5 }); });
   }
 
+  // ---------- problems along a route: numbered pins ----------
+  const hazardLayer = L.layerGroup().addTo(map);
+  let hazardPins = [];
+  function clearRouteHazards() { hazardLayer.clearLayers(); hazardPins = []; }
+  function drawRouteHazards(problems, { onClick } = {}) {
+    clearRouteHazards();
+    (problems || []).forEach((p, i) => {
+      if (p.lat == null || p.lng == null) return;
+      const m = L.marker([p.lat, p.lng], {
+        icon: L.divIcon({ className: '', html: `<div class="hz-pin sev-${p.severity}" data-pin="${i}">${i + 1}</div>`, iconSize: [26, 26], iconAnchor: [13, 13] }),
+        zIndexOffset: 500, keyboard: false,
+      }).bindTooltip(`<b>${p.severity}/5</b> ${escapeHtml(p.label_en || p.type_id)}<br><small>${escapeHtml(p.segment_name || '')}</small>`, { className: 'seg-tip', direction: 'top', opacity: 1 })
+        .on('click', () => onClick && onClick(i)).addTo(hazardLayer);
+      hazardPins.push(m);
+    });
+  }
+  function highlightRouteHazard(i, fly) {
+    hazardPins.forEach((m, j) => m.getElement()?.querySelector('.hz-pin')?.classList.toggle('is-hot', j === i));
+    if (fly && hazardPins[i]) { map.flyTo(hazardPins[i].getLatLng(), Math.max(map.getZoom(), 17), { duration: .6 }); hazardPins[i].openTooltip(); }
+  }
+
+  // ---------- "start walking": zoom in and follow the route ----------
+  const walkLayer = L.layerGroup().addTo(map);
+  let walker = null;
+  function stopWalk() { if (walker) walker.stop(); }
+  /**
+   * Animate a marker along `coords` ([lng,lat]) at a screen speed of ~45 m/s (10–60 s total), with
+   * the camera following. `problems` ([{lat,lng}]) fire onNear(index, problem) the first time the
+   * walker comes within 40 m. Returns { stop }. Respects prefers-reduced-motion (jumps, no fly).
+   */
+  function walkAlong(coords, { speedMps = 1.35, problems = [], onProgress, onNear, onDone, zoom = 18 } = {}) {
+    stopWalk();
+    const pts = coords.map(([lng, lat]) => L.latLng(lat, lng));
+    if (pts.length < 2) return null;
+    const cum = [0];
+    for (let i = 1; i < pts.length; i++) cum.push(cum[i - 1] + pts[i - 1].distanceTo(pts[i]));
+    const total = cum[cum.length - 1];
+    const durationMs = Math.min(60000, Math.max(10000, (total / 45) * 1000));
+    const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+    const marker = L.marker(pts[0], { icon: L.divIcon({ className: '', html: '<div class="walker"><i></i></div>', iconSize: [28, 28], iconAnchor: [14, 14] }), interactive: false, zIndexOffset: 1000 }).addTo(walkLayer);
+    const trail = L.polyline([pts[0]], { color: '#F59E0B', weight: 5, opacity: .95, interactive: false, lineCap: 'round' }).addTo(walkLayer);
+    const seen = new Set();
+    let raf = null, start = null, stopped = false;
+    const step = (now) => {
+      if (stopped) return;
+      if (start == null) start = now;
+      const f = Math.min(1, (now - start) / durationMs);
+      const d = f * total;
+      let i = 1; while (i < cum.length - 1 && cum[i] < d) i++;
+      const a = pts[i - 1], b = pts[i], segLen = cum[i] - cum[i - 1] || 1, tt = Math.min(1, Math.max(0, (d - cum[i - 1]) / segLen));
+      const ll = L.latLng(a.lat + (b.lat - a.lat) * tt, a.lng + (b.lng - a.lng) * tt);
+      marker.setLatLng(ll); trail.addLatLng(ll); map.panTo(ll, { animate: false });
+      problems.forEach((p, k) => { if (!seen.has(k) && p.lat != null && ll.distanceTo([p.lat, p.lng]) < 40) { seen.add(k); onNear && onNear(k, p); } });
+      onProgress && onProgress({ done_m: d, total_m: total, fraction: f, remaining_s: (total - d) / speedMps });
+      if (f < 1) raf = requestAnimationFrame(step); else { walker = null; onDone && onDone({ total_m: total, problems_seen: seen.size }); }
+    };
+    const begin = () => { if (!stopped) raf = requestAnimationFrame(step); };
+    if (reduce) { map.setView(pts[0], zoom, { animate: false }); begin(); }
+    else { map.once('moveend', begin); map.flyTo(pts[0], zoom, { duration: 1.2 }); }
+    walker = { stop() { stopped = true; if (raf) cancelAnimationFrame(raf); map.off('moveend', begin); walkLayer.clearLayers(); walker = null; } };
+    return walker;
+  }
+
   // ---------- locate ----------
   let meMarker = null;
   function locate() {
@@ -297,6 +360,7 @@
     renderSegments, setLens, select, clearSelection, flyToSegment, fitAll, setOnSelect: (fn) => { onSelect = fn; },
     startPicking, stopPicking, clearPicks, setPicks,
     drawRoutes, clearRoutes, highlightRoute,
+    drawRouteHazards, clearRouteHazards, highlightRouteHazard, walkAlong, stopWalk, isWalking: () => !!walker,
     locate, invalidate: () => map.invalidateSize(),
     setBasemap, getBasemap: () => basemap, setOnBasemapChange: (fn) => { onBasemapChange = fn; }, enableGoogle,
     getBounds: () => { const b = map.getBounds(); return { south: b.getSouth(), west: b.getWest(), north: b.getNorth(), east: b.getEast() }; },

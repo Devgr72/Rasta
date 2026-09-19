@@ -250,9 +250,33 @@ describe('POST /api/route', () => {
     assert.ok(rt.score != null);
     assert.ok(rt.worst_hazard && rt.worst_hazard.type_id);
     assert.ok(rt.persona_blockers.length > 0, 'wheelchair is blocked on the Kashmere Gate stretch');
+    // per-persona times, passability, problems and the best route for each persona
+    for (const k of ['walk', 'wheelchair', 'senior']) {
+      assert.ok(Number.isInteger(rt.times[k]) && rt.times[k] >= 1, `times.${k}`);
+      assert.equal(typeof rt.passable[k], 'boolean', `passable.${k}`);
+      assert.ok(Array.isArray(rt.blockers[k]));
+      assert.ok(j.best_for[k] === null || Number.isInteger(j.best_for[k]), `best_for.${k}`);
+    }
+    assert.ok(rt.times.wheelchair >= rt.times.walk && rt.times.senior >= rt.times.walk);
+    assert.equal(rt.passable.wheelchair, false, 'Kashmere Gate blocks wheelchairs');
+    assert.equal(j.recommended_index, j.best_for.wheelchair, 'recommended follows the asked-for persona');
+    assert.ok(rt.problems.length > 0 && rt.problem_count >= rt.problems.length);
+    const p0 = rt.problems[0];
+    for (const k of ['type_id', 'label_en', 'severity', 'segment_name', 'lat', 'lng', 'risk']) assert.ok(k in p0, `problem.${k}`);
+    assert.ok(Number.isFinite(p0.lat) && Number.isFinite(p0.lng));
+    assert.deepEqual(j.speeds_mps, { walk: 1.35, wheelchair: 1.0, senior: 0.9 });
     assert.ok(Number.isInteger(j.candidates) && j.candidates >= 1, 'bbox pre-filter reports how many segments were loaded');
     const all = (await (await fetch(base + '/api/stats')).json()).segments;
     assert.ok(j.candidates < all, `only nearby segments loaded (${j.candidates} of ${all})`);
+  });
+  test('/api/geocode validates input (the upstream itself is covered in geocode.test.js)', async () => {
+    const r = await fetch(base + '/api/geocode?q=a');
+    assert.equal(r.status, 400);
+    assert.match((await r.json()).error, /at least 2/);
+    const r2 = await fetch(base + '/api/geocode/reverse?lat=abc');
+    assert.equal(r2.status, 400);
+    const cfg = await (await fetch(base + '/api/config')).json();
+    assert.ok(['public-nominatim', 'configured'].includes(cfg.geocoder));
   });
   test('unknown persona falls back to walk', async () => {
     const j = await (await json('POST', '/api/route', { from: { lat: 28.6672, lng: 77.2286 }, to: { lat: 28.6598, lng: 77.2288 }, persona: 'dragon' })).json();

@@ -210,11 +210,24 @@
             <span class="step-n">1</span>
             <div><h2 data-i18n="r.step1">Where from, where to</h2><p id="route-hint" aria-live="polite">Tap the map for A, then B.</p></div>
           </div>
-          <div class="points" id="route-points">
-            <div class="point"><b>A</b><span data-rpt="a" data-i18n="r.from">from</span></div>
-              <div class="point"><b>B</b><span data-rpt="b" data-i18n="r.to">to</span></div>
-            <button type="button" class="ghost" id="btn-route-demo" data-i18n="r.demo">Use demo pair</button>
+          <div class="geo" id="route-geo">
+            <div class="geo-row" data-geo="a">
+              <b>A</b>
+              <input type="text" id="geo-a" autocomplete="off" enterkeyhint="search" placeholder="Search a place, or tap the map" aria-label="From" data-i18n-attr="placeholder:r.search.ph;aria-label:r.from">
+              <button type="button" class="ghost geo-go" data-geo-go="a" data-i18n="r.search">Search</button>
+            </div>
+            <div class="geo-results" id="geo-results-a" role="listbox" hidden></div>
+            <div class="geo-row" data-geo="b">
+              <b>B</b>
+              <input type="text" id="geo-b" autocomplete="off" enterkeyhint="search" placeholder="Search a place, or tap the map" aria-label="To" data-i18n-attr="placeholder:r.search.ph;aria-label:r.to">
+              <button type="button" class="ghost geo-go" data-geo-go="b" data-i18n="r.search">Search</button>
+            </div>
+            <div class="geo-results" id="geo-results-b" role="listbox" hidden></div>
+            <div class="points-actions">
+              <button type="button" class="ghost" id="btn-route-swap" data-i18n="r.swap">Swap A and B</button>
+              <button type="button" class="ghost" id="btn-route-demo" data-i18n="r.demo">Use demo pair</button>
               <button type="button" class="ghost" id="btn-route-clear" data-i18n="r.clear">Clear</button>
+            </div>
           </div>
         </div>
         <div class="step">
