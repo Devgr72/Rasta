@@ -2,6 +2,7 @@
 const os = require('node:os');
 const fs = require('node:fs');
 const path = require('node:path');
+process.env.RASTA_DB = ':memory:'; // vision.js records usage through db.js — keep it off the real file
 process.env.RASTA_MOCK_VISION = '1';
 process.env.RASTA_VISION_CACHE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'rasta-vc-'));
 delete process.env.ANTHROPIC_API_KEY;

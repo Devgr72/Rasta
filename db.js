@@ -51,6 +51,20 @@ CREATE TABLE IF NOT EXISTS hazards (
 );
 CREATE INDEX IF NOT EXISTS idx_hazards_segment ON hazards(segment_id);
 CREATE INDEX IF NOT EXISTS idx_photos_segment ON photos(segment_id);
+CREATE TABLE IF NOT EXISTS vision_calls (
+  id INTEGER PRIMARY KEY,
+  hash TEXT,
+  model TEXT,
+  input_tokens INTEGER DEFAULT 0,
+  output_tokens INTEGER DEFAULT 0,
+  cache_read_tokens INTEGER DEFAULT 0,
+  latency_ms INTEGER,
+  cached INTEGER DEFAULT 0,
+  error TEXT,
+  created_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_vision_calls_created ON vision_calls(created_at);
+CREATE INDEX IF NOT EXISTS idx_vision_calls_hash ON vision_calls(hash);
 `);
 
 const q = {
@@ -77,6 +91,20 @@ const q = {
     (SELECT COALESCE(SUM(total_cost_inr), 0) FROM segments) AS total_cost_inr,
     (SELECT COUNT(*) FROM segments WHERE wheelchair_ok = 1) AS wheelchair_ok_count,
     (SELECT COUNT(*) FROM segments WHERE senior_ok = 1) AS senior_ok_count`),
+  insertVisionCall: db.prepare(`INSERT INTO vision_calls (hash, model, input_tokens, output_tokens, cache_read_tokens, latency_ms, cached, error, created_at)
+    VALUES (@hash, @model, @input_tokens, @output_tokens, @cache_read_tokens, @latency_ms, @cached, @error, @created_at)`),
+  visionUsageSince: db.prepare(`SELECT COUNT(*) AS calls,
+    COALESCE(SUM(CASE WHEN cached = 0 AND error IS NULL AND model != 'mock' THEN 1 ELSE 0 END), 0) AS model_calls,
+    COALESCE(SUM(CASE WHEN model = 'mock' THEN 1 ELSE 0 END), 0) AS mock_calls,
+    COALESCE(SUM(cached), 0) AS cache_hits,
+    COALESCE(SUM(CASE WHEN error IS NOT NULL THEN 1 ELSE 0 END), 0) AS errors,
+    COALESCE(SUM(input_tokens), 0) AS input_tokens,
+    COALESCE(SUM(output_tokens), 0) AS output_tokens,
+    COALESCE(SUM(cache_read_tokens), 0) AS cache_read_tokens
+    FROM vision_calls WHERE created_at >= ?`),
+  deleteSegment: db.prepare(`DELETE FROM segments WHERE id = ?`),
+  filenamesFor: db.prepare(`SELECT filename FROM photos WHERE segment_id = ? AND filename IS NOT NULL`),
+  filenameRefs: db.prepare(`SELECT COUNT(*) AS n FROM photos WHERE filename = ?`),
 };
 
 const now = () => new Date().toISOString();
@@ -206,4 +234,38 @@ function isEmpty() {
   return q.count.get().n === 0;
 }
 
-module.exports = { db, saveSegment, getSegment, allSegments, toGeoJSON, stats, isEmpty };
+/** Record one vision call (model call, cache hit, mock or failure) for budgeting and stats. */
+function recordVisionCall({ hash, model, input_tokens = 0, output_tokens = 0, cache_read_tokens = 0, latency_ms = null, cached = false, error = null }) {
+  try {
+    q.insertVisionCall.run({
+      hash: hash || null, model: model || null,
+      input_tokens: Math.max(0, Math.round(Number(input_tokens) || 0)),
+      output_tokens: Math.max(0, Math.round(Number(output_tokens) || 0)),
+      cache_read_tokens: Math.max(0, Math.round(Number(cache_read_tokens) || 0)),
+      latency_ms: latency_ms == null ? null : Math.round(latency_ms),
+      cached: cached ? 1 : 0, error: error ? String(error).slice(0, 300) : null, created_at: now(),
+    });
+  } catch (err) { console.warn('[db] vision_calls insert failed', err.message); }
+}
+
+const startOfUtcDay = () => new Date().toISOString().slice(0, 10) + 'T00:00:00.000Z';
+
+/** Token usage today (UTC) and all time. `tokens` is input + output, the number a budget is set against. */
+function visionUsage() {
+  const shape = (r) => ({ ...r, tokens: r.input_tokens + r.output_tokens });
+  return { today: shape(q.visionUsageSince.get(startOfUtcDay())), total: shape(q.visionUsageSince.get('')) };
+}
+
+/**
+ * Delete a segment (photos and hazards cascade). Returns the upload filenames that
+ * no other segment still references, so the caller can remove the files.
+ */
+const deleteSegment = db.transaction((id) => {
+  const files = q.filenamesFor.all(id).map((r) => r.filename);
+  const info = q.deleteSegment.run(id);
+  if (!info.changes) return null;
+  const orphaned = files.filter((f) => q.filenameRefs.get(f).n === 0);
+  return { id, orphaned_files: [...new Set(orphaned)] };
+});
+
+module.exports = { db, saveSegment, getSegment, allSegments, toGeoJSON, stats, isEmpty, recordVisionCall, visionUsage, deleteSegment };

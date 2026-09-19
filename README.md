@@ -66,6 +66,16 @@ it never reaches the browser.
 | `RASTA_VISION_CACHE_DIR` | `vision.js` | `data/vision-cache/` | Where vision results are cached by photo hash |
 | `PORT` | `server.js` | `3000` | HTTP port |
 | `OSRM_BASE` | `server.js` | `https://router.project-osrm.org` | OSRM routing server base URL |
+| `RASTA_TILE_URL` | `server.js` | OSM tile URL template | Tile host; its origin is added to the CSP `img-src` |
+| `RASTA_VISION_CONCURRENCY` | `vision.js` | `4` | Max model calls in flight across all requests |
+| `RASTA_DAILY_TOKEN_BUDGET` | `vision.js` | unlimited | Input + output tokens allowed per UTC day. Once reached, uncached photos return zero hazards with `meta.error = "daily budget reached"` |
+| `RASTA_RATE_LIMIT_SEGMENTS` | `server.js` | `30` | `POST /api/segments` per IP per window. `0` disables |
+| `RASTA_RATE_LIMIT_ROUTE` | `server.js` | `120` | `POST /api/route` per IP per window. `0` disables |
+| `RASTA_RATE_LIMIT_WINDOW_MIN` | `server.js` | `15` | Rate-limit window in minutes |
+| `RASTA_TRUST_PROXY` | `server.js` | unset | Number of reverse-proxy hops to trust for the client IP (set `1` on Render/Fly/nginx) |
+| `RASTA_MAX_UPLOAD_MB` | `server.js` | `40` | Total photo bytes allowed in one request (also the JSON body limit) |
+| `RASTA_MAX_IMAGE_PX` | `server.js` | `6000` | Longest decoded side allowed per photo |
+| `RASTA_ADMIN_TOKEN` | `server.js` | unset | Enables `DELETE /api/segments/:id` with `Authorization: Bearer <token>` |
 | `BASE` | `scripts/*.js` | `http://localhost:3000` | Target for the browser scripts |
 | `CHROME` | `scripts/*.js` | per-OS default | Chrome binary for the browser scripts |
 | `OUT` | `scripts/*.js` | OS temp dir | Screenshot output directory |
@@ -92,13 +102,22 @@ All responses are JSON. Fields are only ever added, never renamed or removed.
 
 | Method | Path | Notes |
 |---|---|---|
-| `GET` | `/api/health` | `{ok, model, mock}` |
-| `GET` | `/api/stats` | `{segments, hazards, km_covered, avg_score, total_cost_inr, wheelchair_ok_count, senior_ok_count}` |
+| `GET` | `/api/health` | `{ok, model, mock, concurrency, daily_token_budget, budget_reached}` |
+| `GET` | `/api/stats` | `{segments, hazards, km_covered, avg_score, total_cost_inr, wheelchair_ok_count, senior_ok_count, vision:{today, total, budget, budget_reached, concurrency}}` — token usage per UTC day and overall |
 | `GET` | `/api/standards` | The knowledge file |
 | `GET` | `/api/segments` | GeoJSON `FeatureCollection`; each feature's `properties` is a segment summary |
 | `GET` | `/api/segments/:id` | One segment with `photos[]`, `hazards[]` and `verdicts` |
 | `POST` | `/api/segments` | Create a segment. Multipart `name, start, end, photos[]` (up to 12), or JSON `{name, start, end, photos:[dataURL]}`. Runs vision on every photo in parallel, scores, persists, returns the graded segment with `201`. Add `?stream=1` for NDJSON: `{type:"start"}`, one `{type:"photo"}` per result as it lands, then `{type:"segment"}` |
 | `POST` | `/api/route` | `{from:{lat,lng}, to:{lat,lng}, persona}` → OSRM alternatives scored against walked segments, with `coverage`, `worst_hazard`, `persona_blockers` and `recommended_index`. Falls back to `data/demo-route.json` if OSRM fails or exceeds 3 s |
+| `DELETE` | `/api/segments/:id` | Takedown. Only exists when `RASTA_ADMIN_TOKEN` is set; needs `Authorization: Bearer <token>`. Cascades to photos and hazards and removes orphaned upload files |
+
+### Protections
+
+- `POST /api/segments` and `POST /api/route` are rate limited per IP (see env vars above); a 429 comes back as JSON with `retry_after_min`.
+- At most **4** model calls are in flight at once across the whole server (`RASTA_VISION_CONCURRENCY`). Photos in one segment still start together; extras queue for a slot.
+- Every Anthropic response's token usage is written to the `vision_calls` table. With `RASTA_DAILY_TOKEN_BUDGET` set, once the UTC day's input + output tokens pass it, new uncached photos are stored with zero hazards and `meta.error = "daily budget reached"`; the Contribute tab shows a toast and the ledger shows a badge. Cache hits and mock mode are unaffected.
+- Uploads are capped at 12 photos, 8 MB each, `RASTA_MAX_UPLOAD_MB` in total, and each image's header is read to reject anything over `RASTA_MAX_IMAGE_PX` a side or not a JPEG/PNG/WebP/GIF before any model call.
+- `helmet` sets security headers with a CSP that permits only the tile host, Google Fonts and `blob:`/`data:` images. The report page's script lives in `public/report.js` so `script-src` stays `'self'`.
 
 ### Scoring (unchanged from the field-checked rules)
 

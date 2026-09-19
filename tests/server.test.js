@@ -64,6 +64,11 @@ describe('GET endpoints', () => {
     assert.equal(r404.status, 404);
     assert.equal((await r404.json()).ok, false);
   });
+  test('DELETE /api/segments/:id is 404 when no admin token is configured', async () => {
+    const r = await fetch(base + '/api/segments/1', { method: 'DELETE', headers: { authorization: 'Bearer anything' } });
+    assert.equal(r.status, 404);
+    assert.equal((await fetch(base + '/api/segments/1')).status, 200);
+  });
   test('static frontend and report page are served', async () => {
     assert.equal((await fetch(base + '/')).status, 200);
     assert.equal((await fetch(base + '/report.html?id=1')).status, 200);

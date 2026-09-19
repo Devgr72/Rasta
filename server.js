@@ -4,25 +4,81 @@ const path = require('path');
 const fs = require('fs');
 const express = require('express');
 const multer = require('multer');
+const helmet = require('helmet');
+const { rateLimit } = require('express-rate-limit');
 const db = require('./db');
 const scoring = require('./scoring');
 const vision = require('./vision');
+const { imageSize } = require('./lib/image-size');
 
 const PORT = Number(process.env.PORT) || 3000;
 const UPLOAD_DIR = process.env.RASTA_UPLOAD_DIR || path.join(__dirname, 'uploads');
 const OSRM_BASE = process.env.OSRM_BASE || 'https://router.project-osrm.org';
+const TILE_URL = process.env.RASTA_TILE_URL || 'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
+const ADMIN_TOKEN = process.env.RASTA_ADMIN_TOKEN || '';
+const MAX_FILES = 12;
+const MAX_FILE_MB = 8;
+const MAX_UPLOAD_MB = Math.max(1, Number(process.env.RASTA_MAX_UPLOAD_MB) || 40);   // all photos in one request
+const MAX_IMAGE_PX = Math.max(256, Number(process.env.RASTA_MAX_IMAGE_PX) || 6000); // longest side, decoded
 fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 
 const app = express();
 app.disable('x-powered-by');
-app.use(express.json({ limit: '25mb' }));
+
+// Behind a reverse proxy (Render, Fly, nginx) set RASTA_TRUST_PROXY to the number of hops so
+// req.ip is the client, not the proxy. Never `true`: that lets anyone spoof X-Forwarded-For.
+if (process.env.RASTA_TRUST_PROXY) app.set('trust proxy', Number(process.env.RASTA_TRUST_PROXY) || 1);
+
+// Security headers. The CSP allows exactly the third parties the frontend uses: the tile host,
+// Google Fonts on both pages, blob: previews of photos before upload, and data: for the favicon.
+function hostPattern(urlTemplate) {
+  try { return new URL(urlTemplate.replace(/\{s\}/g, 'x')).origin.replace('//x.', '//*.'); } catch { return null; }
+}
+const tileHost = hostPattern(TILE_URL);
+app.use(helmet({
+  contentSecurityPolicy: {
+    useDefaults: true,
+    directives: {
+      'default-src': ["'self'"],
+      'script-src': ["'self'"],
+      'style-src': ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com'], // Leaflet and the app set inline style attributes
+      'font-src': ["'self'", 'https://fonts.gstatic.com', 'data:'],
+      'img-src': ["'self'", 'data:', 'blob:', ...(tileHost ? [tileHost] : []), 'https://*.tile.openstreetmap.org', 'https://tile.openstreetmap.org'],
+      'connect-src': ["'self'"],
+      'object-src': ["'none'"],
+      'frame-ancestors': ["'self'"],
+      'upgrade-insecure-requests': null, // the local demo runs on plain http
+    },
+  },
+  crossOriginEmbedderPolicy: false,          // tiles and fonts are cross-origin without CORP headers
+  crossOriginResourcePolicy: { policy: 'cross-origin' }, // let uploaded photos be embedded elsewhere (reports)
+  referrerPolicy: { policy: 'strict-origin-when-cross-origin' },
+}));
+
+// Per-IP rate limits on the two endpoints that cost money or hit a third party. 0 disables.
+const WINDOW_MIN = Math.max(1, Number(process.env.RASTA_RATE_LIMIT_WINDOW_MIN) || 15);
+const limiter = (envName, fallback, what) => {
+  const max = process.env[envName] === undefined ? fallback : Number(process.env[envName]);
+  if (!max) return (_req, _res, next) => next();
+  return rateLimit({
+    windowMs: WINDOW_MIN * 60 * 1000,
+    limit: max,
+    standardHeaders: 'draft-7',
+    legacyHeaders: false,
+    handler: (_req, res) => fail(res, 429, `Too many ${what} from this address — try again in a few minutes`, { retry_after_min: WINDOW_MIN }),
+  });
+};
+const segmentLimiter = limiter('RASTA_RATE_LIMIT_SEGMENTS', 30, 'footpath uploads');
+const routeLimiter = limiter('RASTA_RATE_LIMIT_ROUTE', 120, 'route requests');
+
+app.use(express.json({ limit: `${MAX_UPLOAD_MB}mb` }));
 app.use(express.static(path.join(__dirname, 'public'), { extensions: ['html'] }));
 app.use('/uploads', express.static(UPLOAD_DIR, { maxAge: '7d', immutable: true }));
 app.use('/vendor/leaflet', express.static(path.join(__dirname, 'node_modules', 'leaflet', 'dist'), { maxAge: '30d', immutable: true }));
 
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { files: 12, fileSize: 8 * 1024 * 1024 },
+  limits: { files: MAX_FILES, fileSize: MAX_FILE_MB * 1024 * 1024 },
   fileFilter: (_req, file, cb) => cb(null, /^image\//.test(file.mimetype)),
 });
 
@@ -58,6 +114,21 @@ function collectPhotoBuffers(req) {
     if (b) out.push(b);
   }
   return out;
+}
+
+// Reject before any model call: too many bytes in one request, an unrecognised format, or an
+// image so large that decoding it would be the attack. Returns an error string or null.
+function checkPhotoBuffers(buffers) {
+  if (buffers.length > MAX_FILES) return `at most ${MAX_FILES} photos per footpath`;
+  const total = buffers.reduce((s, b) => s + b.length, 0);
+  if (total > MAX_UPLOAD_MB * 1024 * 1024) return `photos total ${(total / 1048576).toFixed(1)} MB — the limit is ${MAX_UPLOAD_MB} MB per upload`;
+  for (const [i, b] of buffers.entries()) {
+    if (b.length > MAX_FILE_MB * 1024 * 1024) return `photo ${i + 1} is over ${MAX_FILE_MB} MB`;
+    const dim = imageSize(b);
+    if (!dim) return `photo ${i + 1} is not a JPEG, PNG, WebP or GIF`;
+    if (dim.width > MAX_IMAGE_PX || dim.height > MAX_IMAGE_PX) return `photo ${i + 1} is ${dim.width}×${dim.height} px — resize to under ${MAX_IMAGE_PX} px a side`;
+  }
+  return null;
 }
 
 async function analyseAndSave({ name, start, end }, buffers, onPhoto) {
@@ -97,12 +168,40 @@ async function analyseAndSave({ name, start, end }, buffers, onPhoto) {
 }
 
 // ---------- API ----------
-app.get('/api/health', (_req, res) => res.json({ ok: true, model: vision.MODEL, mock: vision.MOCK }));
+app.get('/api/health', (_req, res) => {
+  let budget_reached = false;
+  try { budget_reached = vision.usage().budget_reached; } catch { /* stats are best-effort */ }
+  res.json({ ok: true, model: vision.MODEL, mock: vision.MOCK, concurrency: vision.CONCURRENCY, daily_token_budget: vision.DAILY_BUDGET || null, budget_reached });
+});
 
 app.get('/api/standards', (_req, res) => res.json(scoring.STANDARDS));
 
 app.get('/api/stats', (_req, res) => {
-  try { res.json(db.stats()); } catch (err) { fail(res, 500, err.message); }
+  try { res.json({ ...db.stats(), vision: vision.usage() }); } catch (err) { fail(res, 500, err.message); }
+});
+
+// Takedowns. Needs RASTA_ADMIN_TOKEN configured and sent as `Authorization: Bearer <token>`.
+function requireAdmin(req, res, next) {
+  if (!ADMIN_TOKEN) return fail(res, 404, 'not found'); // admin routes do not exist without a token
+  const m = /^Bearer\s+(.+)$/i.exec(req.headers.authorization || '');
+  const given = Buffer.from(m ? m[1].trim() : '');
+  const want = Buffer.from(ADMIN_TOKEN);
+  if (given.length !== want.length || !require('crypto').timingSafeEqual(given, want)) return fail(res, 401, 'unauthorised');
+  next();
+}
+app.delete('/api/segments/:id', requireAdmin, (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id <= 0) return fail(res, 400, 'bad id');
+  try {
+    const r = db.deleteSegment(id);
+    if (!r) return fail(res, 404, 'segment not found');
+    let files_removed = 0;
+    for (const f of r.orphaned_files) {
+      try { fs.unlinkSync(path.join(UPLOAD_DIR, path.basename(f))); files_removed++; } catch { /* already gone */ }
+    }
+    console.log(`[admin] deleted segment #${id}, removed ${files_removed} orphaned photo file(s)`);
+    res.json({ ok: true, id, files_removed });
+  } catch (err) { fail(res, 500, err.message); }
 });
 
 app.get('/api/segments', (_req, res) => {
@@ -119,14 +218,17 @@ app.get('/api/segments/:id', (req, res) => {
 
 // POST /api/segments — multipart (fields + photos[]) or JSON {name,start,end,photos:[dataURL]}.
 // Add ?stream=1 to receive NDJSON: one {type:"photo"} line per result as it lands, then {type:"segment"}.
-app.post('/api/segments', upload.array('photos', 12), async (req, res) => {
+app.post('/api/segments', segmentLimiter, upload.array('photos', MAX_FILES), async (req, res) => {
   const body = req.body || {};
-  let start = parsePoint(body.start ? (typeof body.start === 'string' ? JSON.parse(body.start) : body.start) : { lat: body.start_lat, lng: body.start_lng });
-  let end = parsePoint(body.end ? (typeof body.end === 'string' ? JSON.parse(body.end) : body.end) : { lat: body.end_lat, lng: body.end_lng });
+  const point = (v, lat, lng) => { try { return parsePoint(v ? (typeof v === 'string' ? JSON.parse(v) : v) : { lat, lng }); } catch { return null; } };
+  const start = point(body.start, body.start_lat, body.start_lng);
+  const end = point(body.end, body.end_lat, body.end_lng);
   const name = String(body.name || '').trim().slice(0, 120) || 'Unnamed footpath';
   if (!start || !end) return fail(res, 400, 'start and end must be {lat,lng}');
   const buffers = collectPhotoBuffers(req);
   if (!buffers.length) return fail(res, 400, 'attach at least one photo');
+  const bad = checkPhotoBuffers(buffers);
+  if (bad) return fail(res, 400, bad);
 
   const stream = req.query.stream === '1';
   if (stream) {
@@ -177,7 +279,7 @@ async function fetchOSRM(from, to) {
   } finally { clearTimeout(timer); }
 }
 
-app.post('/api/route', async (req, res) => {
+app.post('/api/route', routeLimiter, async (req, res) => {
   const from = parsePoint(req.body?.from), to = parsePoint(req.body?.to);
   const persona = ['walk', 'wheelchair', 'senior'].includes(req.body?.persona) ? req.body.persona : 'walk';
   if (!from || !to) return fail(res, 400, 'from and to must be {lat,lng}');
@@ -231,6 +333,8 @@ function seedIfEmpty() {
 app.use((err, _req, res, _next) => {
   console.error('[http]', err.message);
   if (err instanceof multer.MulterError) return fail(res, 400, `upload: ${err.message}`);
+  if (err.type === 'entity.too.large') return fail(res, 413, `request body over ${MAX_UPLOAD_MB} MB`);
+  if (err.type === 'entity.parse.failed') return fail(res, 400, 'malformed JSON body');
   fail(res, 500, 'server error');
 });
 

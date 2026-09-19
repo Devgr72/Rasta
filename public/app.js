@@ -360,6 +360,7 @@
     state.photos.forEach((p, i) => fd.append('photos', p.blob, p.name || `photo-${i}.jpg`));
 
     let segment = null;
+    let budgetToasted = false;
     const landing = [];
     try {
       const r = await fetch('/api/segments?stream=1', { method: 'POST', body: fd });
@@ -378,7 +379,10 @@
             const p = msg.photo; const shot = $$('#photo-strip .shot')[p.index];
             if (!shot) continue;
             shot.classList.remove('is-scanning');
-            if (p.status === 'failed') { shot.classList.add('is-failed'); shot.insertAdjacentHTML('beforeend', `<span class="fail">Couldn't analyse: ${esc(p.error || 'unknown')}</span>`); }
+            if (p.status === 'failed') {
+              shot.classList.add('is-failed'); shot.insertAdjacentHTML('beforeend', `<span class="fail">Couldn't analyse: ${esc(p.error || 'unknown')}</span>`);
+              if (/daily budget/i.test(p.error || '') && !budgetToasted) { budgetToasted = true; toast("Today's analysis budget is used up. Photos were saved without hazards — try again tomorrow.", 'error'); }
+            }
             if (p.status === 'mock') shot.insertAdjacentHTML('beforeend', '<span class="badge mock">mock — no API key</span>');
             else if (p.cached) shot.insertAdjacentHTML('beforeend', '<span class="badge">cached</span>');
             landing.push(landBoxes(shot, p.hazards, { stagger: 150, onEach: () => { found++; ticker.textContent = found; ticker.classList.add('tick'); setTimeout(() => ticker.classList.remove('tick'), 200); } }));
@@ -510,6 +514,7 @@
     try {
       const health = await api('/api/health');
       if (health.mock) { const s = $('#ledger-status'); s.hidden = false; s.textContent = 'Mock vision — add ANTHROPIC_API_KEY to .env'; }
+      else if (health.budget_reached) { const s = $('#ledger-status'); s.hidden = false; s.textContent = "Today's analysis budget is used up"; }
     } catch { toast('Server unreachable', 'error'); }
     try { state.standards = await api('/api/standards'); state.types = Object.fromEntries(state.standards.hazard_types.map((t) => [t.id, t])); } catch { toast('Knowledge file failed to load — hazard labels will be raw ids', 'error'); }
     const gj = await loadSegments();

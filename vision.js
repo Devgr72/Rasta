@@ -5,6 +5,8 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const Anthropic = require('@anthropic-ai/sdk');
+const db = require('./db');
+const { Semaphore } = require('./lib/semaphore');
 
 const STANDARDS = require('./knowledge/standards.json');
 const MODEL = process.env.RASTA_MODEL || 'claude-fable-5-1';
@@ -12,6 +14,33 @@ const CACHE_DIR = process.env.RASTA_VISION_CACHE_DIR || path.join(__dirname, 'da
 const HAZARD_IDS = new Set(STANDARDS.hazard_types.map((h) => h.id));
 const SURFACES = new Set(['paver', 'concrete', 'none', 'mud', 'asphalt', 'stone']);
 const MOCK = process.env.RASTA_MOCK_VISION === '1' || !process.env.ANTHROPIC_API_KEY;
+
+// Never more than this many model calls in flight across every request. Photos within a
+// segment still fire together; they just queue for a slot.
+const CONCURRENCY = Math.max(1, Number(process.env.RASTA_VISION_CONCURRENCY) || 4);
+const slots = new Semaphore(CONCURRENCY);
+
+// Daily spend cap in tokens (input + output, UTC day). 0 or unset means unlimited.
+const DAILY_BUDGET = Math.max(0, Number(process.env.RASTA_DAILY_TOKEN_BUDGET) || 0);
+const BUDGET_ERROR = 'daily budget reached';
+
+function budgetReached() {
+  if (!DAILY_BUDGET) return false;
+  try { return db.visionUsage().today.tokens >= DAILY_BUDGET; } catch { return false; }
+}
+
+/** Usage summary for /api/stats and /api/health. */
+function usage() {
+  const u = db.visionUsage();
+  return {
+    ...u,
+    budget: DAILY_BUDGET || null,
+    budget_reached: DAILY_BUDGET ? u.today.tokens >= DAILY_BUDGET : false,
+    concurrency: CONCURRENCY,
+    in_flight: slots.active,
+    waiting: slots.waiting,
+  };
+}
 
 let client = null;
 function getClient() {
@@ -131,11 +160,16 @@ async function callModel(imageB64, mediaType, repairHint) {
     fallbacks: 'default',
     messages: [{ role: 'user', content }],
   });
+  const usage = {
+    input_tokens: res.usage?.input_tokens || 0,
+    output_tokens: res.usage?.output_tokens || 0,
+    cache_read_tokens: res.usage?.cache_read_input_tokens || 0,
+  };
   if (res.stop_reason === 'refusal') {
     const why = res.stop_details?.explanation || res.stop_details?.category || 'refused';
-    throw Object.assign(new Error(`model declined: ${why}`), { refusal: true });
+    throw Object.assign(new Error(`model declined: ${why}`), { refusal: true, usage });
   }
-  return res.content.filter((b) => b.type === 'text').map((b) => b.text).join('\n');
+  return { text: res.content.filter((b) => b.type === 'text').map((b) => b.text).join('\n'), usage };
 }
 
 // Deterministic stand-in used when no key is configured, so the UI and the
@@ -171,43 +205,61 @@ async function analysePhoto(input) {
   const cached = readCache(hash);
   if (cached) {
     console.log(`[vision] ${label} cache hit (${Date.now() - t0}ms)`);
+    db.recordVisionCall({ hash, model: cached.meta?.model || MODEL, latency_ms: Date.now() - t0, cached: true });
     return { ...cached, meta: { ...cached.meta, cached: true, latency_ms: Date.now() - t0 } };
   }
 
   if (MOCK) {
     const result = { ...mockResult(hash), meta: { hash, cached: false, latency_ms: 0, model: 'mock', mock: true } };
     console.log(`[vision] ${label} MOCK (no ANTHROPIC_API_KEY)`);
+    db.recordVisionCall({ hash, model: 'mock', latency_ms: 0 });
     return result;
   }
 
+  const failed = (error) => ({ ...validate({ hazards: [] }), meta: { hash, cached: false, latency_ms: Date.now() - t0, model: MODEL, mock: false, error } });
+
   if (buf.length > 4.8 * 1024 * 1024) {
-    return { ...validate({ hazards: [] }), meta: { hash, cached: false, latency_ms: 0, model: MODEL, mock: false, error: 'photo over 4.8 MB — resize before upload' } };
+    return failed('photo over 4.8 MB — resize before upload');
+  }
+
+  if (budgetReached()) {
+    console.warn(`[vision] ${label} skipped: ${BUDGET_ERROR} (${DAILY_BUDGET} tokens/day)`);
+    db.recordVisionCall({ hash, model: MODEL, latency_ms: 0, error: BUDGET_ERROR });
+    return failed(BUDGET_ERROR);
   }
 
   const b64 = buf.toString('base64');
   const mediaType = detectMediaType(buf);
   let lastErr = null;
-  let repairHint = null;
-  for (let attempt = 1; attempt <= 2; attempt++) {
-    try {
-      const text = await callModel(b64, mediaType, repairHint);
-      const parsed = JSON.parse(stripFences(text));
-      const result = { ...validate(parsed), meta: { hash, cached: false, latency_ms: Date.now() - t0, model: MODEL, mock: false, attempts: attempt } };
-      console.log(`[vision] ${label} ${result.hazards.length} hazards in ${result.meta.latency_ms}ms (attempt ${attempt})`);
-      writeCache(hash, result);
-      return result;
-    } catch (err) {
-      lastErr = err;
-      const isParse = err instanceof SyntaxError || /not an object|not an array/.test(err.message);
-      console.warn(`[vision] ${label} attempt ${attempt} failed: ${err.message}`);
-      if (err.refusal || !isParse) break; // network / API errors are not fixed by a repair prompt
-      repairHint = err.message.slice(0, 120);
+
+  // One slot per photo for both attempts, so a repair retry cannot double the in-flight count.
+  const outcome = await slots.run(async () => {
+    let repairHint = null;
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      const tA = Date.now();
+      let usage = null;
+      try {
+        const out = await callModel(b64, mediaType, repairHint);
+        usage = out.usage;
+        const parsed = JSON.parse(stripFences(out.text));
+        const result = { ...validate(parsed), meta: { hash, cached: false, latency_ms: Date.now() - t0, model: MODEL, mock: false, attempts: attempt, usage } };
+        console.log(`[vision] ${label} ${result.hazards.length} hazards in ${result.meta.latency_ms}ms (attempt ${attempt}, ${usage.input_tokens}+${usage.output_tokens} tokens)`);
+        db.recordVisionCall({ hash, model: MODEL, ...usage, latency_ms: Date.now() - tA });
+        writeCache(hash, result);
+        return result;
+      } catch (err) {
+        lastErr = err;
+        db.recordVisionCall({ hash, model: MODEL, ...(err.usage || usage || {}), latency_ms: Date.now() - tA, error: err.message });
+        const isParse = err instanceof SyntaxError || /not an object|not an array/.test(err.message);
+        console.warn(`[vision] ${label} attempt ${attempt} failed: ${err.message}`);
+        if (err.refusal || !isParse) break; // network / API errors are not fixed by a repair prompt
+        repairHint = err.message.slice(0, 120);
+      }
     }
-  }
-  return {
-    ...validate({ hazards: [] }),
-    meta: { hash, cached: false, latency_ms: Date.now() - t0, model: MODEL, mock: false, error: lastErr ? lastErr.message : 'unknown failure' },
-  };
+    return null;
+  });
+  if (outcome) return outcome;
+  return failed(lastErr ? lastErr.message : 'unknown failure');
 }
 
-module.exports = { analysePhoto, validate, stripFences, sha256, MODEL, MOCK };
+module.exports = { analysePhoto, validate, stripFences, sha256, usage, MODEL, MOCK, CONCURRENCY, DAILY_BUDGET, BUDGET_ERROR };
