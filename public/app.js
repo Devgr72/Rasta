@@ -302,23 +302,62 @@
     } catch { return file; }
   }
 
+  // Read GPS and capture time from the original file *before* shrinking (the canvas re-encode
+  // drops EXIF). Sent to the server as photo_meta so the location survives the resize.
+  async function photoMeta(file) {
+    const meta = {};
+    if (!window.exifr) return meta;
+    try {
+      const g = await exifr.gps(file);
+      if (g && Number.isFinite(g.latitude) && Number.isFinite(g.longitude) && (g.latitude !== 0 || g.longitude !== 0)) { meta.lat = g.latitude; meta.lng = g.longitude; }
+    } catch { /* no GPS */ }
+    try {
+      const x = await exifr.parse(file, { pick: ['DateTimeOriginal'], reviveValues: false });
+      const s = x && x.DateTimeOriginal;
+      const m = typeof s === 'string' ? /^(\d{4}):(\d{2}):(\d{2})[ T](\d{2}):(\d{2}):(\d{2})/.exec(s) : null;
+      if (m) meta.taken_at = `${m[1]}-${m[2]}-${m[3]}T${m[4]}:${m[5]}:${m[6]}`; // camera wall-clock, no zone invented
+    } catch { /* no time */ }
+    return meta;
+  }
+
+  function updateGpsPlacer() {
+    const n = state.photos.filter((p) => p.meta && p.meta.lat != null).length;
+    const b = $('#btn-place-gps');
+    b.hidden = n === 0;
+    b.textContent = n === 1 ? 'Place start from photo GPS' : `Place from photo GPS (${n} photos)`;
+  }
+
   async function addFiles(files) {
     const room = 12 - state.photos.length;
     const list = [...files].filter((f) => /^image\//.test(f.type) || /\.(heic|heif)$/i.test(f.name)).slice(0, room);
     if ([...files].length > room) toast(`Only ${room} more photo${room === 1 ? '' : 's'} fit (12 max)`, 'error');
     for (const f of list) {
-      const blob = await shrink(f);
+      const [meta, blob] = await Promise.all([photoMeta(f), shrink(f)]);
       const url = URL.createObjectURL(blob);
       const id = Math.random().toString(36).slice(2);
-      state.photos.push({ id, blob, url, name: f.name });
+      state.photos.push({ id, blob, url, name: f.name, meta });
       const shot = document.createElement('div');
       shot.className = 'shot'; shot.dataset.id = id;
-      shot.innerHTML = `<img src="${url}" alt=""><button type="button" class="rm" aria-label="Remove photo">×</button><i class="scan"></i>`;
-      shot.querySelector('.rm').addEventListener('click', () => { state.photos = state.photos.filter((p) => p.id !== id); shot.remove(); URL.revokeObjectURL(url); updateAnalyseState(); });
+      shot.innerHTML = `<img src="${url}" alt=""><button type="button" class="rm" aria-label="Remove photo">×</button><i class="scan"></i>${meta.lat != null ? '<span class="badge" title="This photo carries a GPS position">GPS</span>' : ''}`;
+      shot.querySelector('.rm').addEventListener('click', () => { state.photos = state.photos.filter((p) => p.id !== id); shot.remove(); URL.revokeObjectURL(url); updateAnalyseState(); updateGpsPlacer(); });
       $('#photo-strip').appendChild(shot);
     }
     updateAnalyseState();
+    updateGpsPlacer();
   }
+
+  // Auto-place the stretch from the first and last geotagged photo. Two map taps remain the fallback.
+  $('#btn-place-gps').addEventListener('click', () => {
+    const withGps = state.photos.filter((p) => p.meta && p.meta.lat != null);
+    if (!withGps.length) return;
+    const sorted = withGps.every((p) => p.meta.taken_at) ? withGps.slice().sort((a, b) => a.meta.taken_at.localeCompare(b.meta.taken_at)) : withGps;
+    const a = sorted[0].meta, b = sorted[sorted.length - 1].meta;
+    const pts = [{ lat: a.lat, lng: a.lng }];
+    if (sorted.length > 1 && haversine(a, b) > 5) pts.push({ lat: b.lat, lng: b.lng });
+    M.setPicks(pts);
+    M.map.flyToBounds(L.latLngBounds(pts.map((p) => [p.lat, p.lng])).pad(0.6), { maxZoom: 17, duration: 0.8 });
+    toast(pts.length === 2 ? `Placed from ${sorted.length} geotagged photos. Drag the markers if the GPS was off.` : 'Start placed from the photo. Tap the map where you stopped.', 'ok');
+  });
   $('#photo-input').addEventListener('change', (e) => { addFiles(e.target.files); e.target.value = ''; });
   const dz = $('#dropzone');
   dz.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); $('#photo-input').click(); } });
@@ -331,6 +370,7 @@
     state.photos = [];
     const strip = $('#photo-strip'); strip.innerHTML = ''; strip.classList.remove('is-large'); $('#strip-home').appendChild(strip);
     $('#seg-name').value = ''; $('[data-step="name"]').classList.remove('is-done');
+    $('#btn-place-gps').hidden = true;
     M.clearPicks(); onSegPoints([]);
     $('#result').hidden = true; $('#contribute-form').hidden = false;
     $('#hazard-count').textContent = '0'; $('#dial-num').textContent = '0'; $('#dial-num').dataset.v = 0;
@@ -358,6 +398,7 @@
     fd.append('start', JSON.stringify(state.segPoints[0]));
     fd.append('end', JSON.stringify(state.segPoints[1]));
     state.photos.forEach((p, i) => fd.append('photos', p.blob, p.name || `photo-${i}.jpg`));
+    fd.append('photo_meta', JSON.stringify(state.photos.map((p) => p.meta || {})));
 
     let segment = null;
     let budgetToasted = false;

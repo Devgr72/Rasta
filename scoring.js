@@ -124,14 +124,77 @@ function gradeSegment({ name, start, end }, photoResults) {
   };
 }
 
-/** Score a route polyline against graded segments. coords: [[lng,lat],...] */
+// ---------- geometry helpers (coords are GeoJSON [lng, lat]) ----------
+const M_PER_DEG_LAT = 110540;
+const mPerDegLng = (lat) => 111320 * Math.cos((lat * Math.PI) / 180);
+
+/** Length of a polyline in metres. */
+function polylineLength(coords) {
+  let m = 0;
+  for (let i = 1; i < coords.length; i++) m += haversine({ lng: coords[i - 1][0], lat: coords[i - 1][1] }, { lng: coords[i][0], lat: coords[i][1] });
+  return m;
+}
+
+/** Bounding box {min_lat, min_lng, max_lat, max_lng} of a coordinate list. */
+function bboxOf(coords) {
+  const b = { min_lat: Infinity, min_lng: Infinity, max_lat: -Infinity, max_lng: -Infinity };
+  for (const [lng, lat] of coords) {
+    if (lat < b.min_lat) b.min_lat = lat; if (lat > b.max_lat) b.max_lat = lat;
+    if (lng < b.min_lng) b.min_lng = lng; if (lng > b.max_lng) b.max_lng = lng;
+  }
+  return b;
+}
+
+/** Grow a bbox by `metres` on every side. */
+function padBbox(b, metres) {
+  const dLat = metres / M_PER_DEG_LAT;
+  const dLng = metres / mPerDegLng((b.min_lat + b.max_lat) / 2);
+  return { min_lat: b.min_lat - dLat, max_lat: b.max_lat + dLat, min_lng: b.min_lng - dLng, max_lng: b.max_lng + dLng };
+}
+
+/**
+ * Shortest distance in metres from a point {lat,lng} to a polyline, using a local flat
+ * projection (exact enough for tens of metres at city scale, and far cheaper than haversine per vertex).
+ */
+function pointToPolylineM(p, coords) {
+  if (!coords || !coords.length) return Infinity;
+  const kx = mPerDegLng(p.lat), ky = M_PER_DEG_LAT;
+  let best = Infinity;
+  let ax = (coords[0][0] - p.lng) * kx, ay = (coords[0][1] - p.lat) * ky;
+  if (coords.length === 1) return Math.hypot(ax, ay);
+  for (let i = 1; i < coords.length; i++) {
+    const bx = (coords[i][0] - p.lng) * kx, by = (coords[i][1] - p.lat) * ky;
+    const dx = bx - ax, dy = by - ay;
+    const len2 = dx * dx + dy * dy;
+    let t = len2 ? -(ax * dx + ay * dy) / len2 : 0; // projection of the origin (the point) onto the segment
+    t = t < 0 ? 0 : t > 1 ? 1 : t;
+    const d = Math.hypot(ax + dx * t, ay + dy * t);
+    if (d < best) best = d;
+    ax = bx; ay = by;
+  }
+  return best;
+}
+
+/** The polyline a segment is scored against: stored footway geometry, else the straight line. */
+function segmentCoords(s) {
+  const g = s.geometry && s.geometry.coordinates;
+  if (Array.isArray(g) && g.length >= 2) return g;
+  return [[s.start.lng, s.start.lat], [s.end.lng, s.end.lat]];
+}
+
+/**
+ * Score a route polyline against graded segments. coords: [[lng,lat],...]
+ * Samples the route every `sampleEveryM`; a sample is covered when it lies within `radiusM` of a
+ * segment's polyline (point-to-polyline distance, not midpoint). Covered samples contribute each
+ * matched segment's score weighted by its length. Coverage is the share of samples that found data.
+ * Pure: no IO. Callers may pre-filter `segments` by bounding box; results are identical.
+ */
 function scoreRoute(coords, segments, { sampleEveryM = 25, radiusM = 40 } = {}) {
   const points = coords.map(([lng, lat]) => ({ lat, lng }));
-  const mids = segments.map((s) => ({
-    seg: s,
-    mid: { lat: (s.start.lat + s.end.lat) / 2, lng: (s.start.lng + s.end.lng) / 2 },
-    reach: Math.max(radiusM, s.length_m / 2), // long segments count along their whole run
-  }));
+  const cands = segments.map((s) => {
+    const c = segmentCoords(s);
+    return { seg: s, coords: c, bbox: padBbox(bboxOf(c), radiusM) };
+  });
 
   // resample along the polyline
   const samples = [];
@@ -156,12 +219,14 @@ function scoreRoute(coords, segments, { sampleEveryM = 25, radiusM = 40 } = {}) 
   const hit = new Map();
   for (const p of samples) {
     let any = false;
-    for (const m of mids) {
-      if (haversine(p, m.mid) <= m.reach) {
+    for (const c of cands) {
+      const b = c.bbox;
+      if (p.lat < b.min_lat || p.lat > b.max_lat || p.lng < b.min_lng || p.lng > b.max_lng) continue; // cheap reject
+      if (pointToPolylineM(p, c.coords) <= radiusM) {
         any = true;
-        weighted += m.seg.score * m.seg.length_m;
-        weight += m.seg.length_m;
-        hit.set(m.seg.id, m.seg);
+        weighted += c.seg.score * c.seg.length_m;
+        weight += c.seg.length_m;
+        hit.set(c.seg.id, c.seg);
       }
     }
     if (any) covered++;
@@ -171,4 +236,7 @@ function scoreRoute(coords, segments, { sampleEveryM = 25, radiusM = 40 } = {}) 
   return { score, coverage, samples: samples.length, segments: [...hit.values()] };
 }
 
-module.exports = { haversine, enrichHazard, scoreFromHazards, personaVerdicts, gradeSegment, scoreRoute, TYPES, STANDARDS };
+module.exports = {
+  haversine, polylineLength, bboxOf, padBbox, pointToPolylineM, segmentCoords,
+  enrichHazard, scoreFromHazards, personaVerdicts, gradeSegment, scoreRoute, TYPES, STANDARDS,
+};

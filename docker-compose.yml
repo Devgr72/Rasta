@@ -1,0 +1,52 @@
+# docker compose up -d                       → the app on http://localhost:3000 (data + uploads on named volumes)
+# docker compose --profile routing up -d     → also a self-hosted OSRM foot router on :5000
+#   (run `sh scripts/osrm-prepare.sh` once first to build the Delhi graph into ./osrm-data)
+services:
+  app:
+    build: .
+    image: rasta:local
+    restart: unless-stopped
+    ports:
+      - "${PORT:-3000}:3000"
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      PORT: "3000"
+      RASTA_DB: /app/data/rasta.db
+      RASTA_UPLOAD_DIR: /app/uploads
+      RASTA_TRUST_PROXY: "${RASTA_TRUST_PROXY:-}"
+      # Point at the local router when the routing profile is up; otherwise whatever .env says.
+      OSRM_BASE: "${OSRM_BASE:-https://router.project-osrm.org}"
+      RASTA_TILE_URL: "${RASTA_TILE_URL:-https://tile.openstreetmap.org/{z}/{x}/{y}.png}"
+      RASTA_TILE_ATTRIBUTION: "${RASTA_TILE_ATTRIBUTION:-}"
+    volumes:
+      - rasta-data:/app/data
+      - rasta-uploads:/app/uploads
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  # Self-hosted routing. Serves the graph built by scripts/osrm-prepare.sh (foot profile, MLD).
+  osrm:
+    image: ghcr.io/project-osrm/osrm-backend:v5.27.1
+    profiles: ["routing"]
+    restart: unless-stopped
+    command: osrm-routed --algorithm mld --max-matching-size 500 /data/${OSRM_NAME:-delhi}.osrm
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./osrm-data:/data:ro
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- 'http://localhost:5000/nearest/v1/foot/77.2286,28.6672' | grep -q '\"code\":\"Ok\"' || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+volumes:
+  rasta-data:
+  rasta-uploads:

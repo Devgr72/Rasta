@@ -146,6 +146,8 @@ button:disabled { cursor: not-allowed; }
 .point:nth-child(2) b { border-color: var(--ink); color: var(--ink); }
 .point.is-set { color: var(--ink); border-color: var(--slate-600); }
 .points-len { font-size: 13px; color: var(--ink-dim); }
+.points .gps { grid-column: 1 / -1; color: var(--amber); border-color: var(--amber-dim); }
+.points .gps:hover { border-color: var(--amber); }
 .points-len b { color: var(--ink); font-variation-settings: "wdth" 108; }
 .field input { width: 100%; background: var(--slate-800); border: 1px solid var(--slate-700); border-radius: var(--radius); padding: 12px 14px; font-size: 15px; min-height: 48px; }
 .field input:focus { border-color: var(--amber); outline: none; }

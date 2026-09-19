@@ -11,11 +11,13 @@ const vision = require('./vision');
 const { imageSize } = require('./lib/image-size');
 const { createStorage } = require('./lib/storage');
 const exif = require('./lib/exif');
+const osrm = require('./lib/osrm');
 
 const PORT = Number(process.env.PORT) || 3000;
 const UPLOAD_DIR = process.env.RASTA_UPLOAD_DIR || path.join(__dirname, 'uploads');
-const OSRM_BASE = process.env.OSRM_BASE || 'https://router.project-osrm.org';
 const TILE_URL = process.env.RASTA_TILE_URL || 'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
+const TILE_ATTRIBUTION = process.env.RASTA_TILE_ATTRIBUTION || '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors';
+const ROUTE_RADIUS_M = 40; // CLAUDE.md: graded segments within 40 m of a 25 m sample count
 const ADMIN_TOKEN = process.env.RASTA_ADMIN_TOKEN || '';
 const MAX_FILES = 12;
 const MAX_FILE_MB = 8;
@@ -94,6 +96,7 @@ if (storage.kind === 'local') {
   });
 }
 app.use('/vendor/leaflet', express.static(path.join(__dirname, 'node_modules', 'leaflet', 'dist'), { maxAge: '30d', immutable: true }));
+app.use('/vendor/exifr', express.static(path.join(__dirname, 'node_modules', 'exifr', 'dist'), { maxAge: '30d', immutable: true }));
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -159,12 +162,23 @@ function parsePhotoMeta(body, n) {
   return Array.from({ length: n }, (_, i) => {
     const m = list[i] || {};
     const p = parsePoint({ lat: m.lat, lng: m.lng });
-    const t = m.taken_at ? new Date(m.taken_at) : null;
-    return { lat: p ? p.lat : null, lng: p ? p.lng : null, taken_at: t && !Number.isNaN(t.getTime()) ? t.toISOString() : null };
+    return { lat: p ? p.lat : null, lng: p ? p.lng : null, taken_at: normaliseTime(m.taken_at) };
   });
+}
+// Keep an ISO-ish wall-clock string as given (EXIF has no zone); coerce anything else through Date.
+function normaliseTime(v) {
+  if (v == null || v === '') return null;
+  const s = String(v).trim();
+  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})?$/.test(s)) return s.slice(0, 32);
+  const d = new Date(s);
+  return Number.isNaN(d.getTime()) ? null : d.toISOString();
 }
 
 async function analyseAndSave({ name, start, end }, buffers, onPhoto, hints = []) {
+  const snapPromise = osrm.snapToFootway(start, end).catch((err) => {
+    console.warn('[snap] failed', err.message);
+    return { geometry: { type: 'LineString', coordinates: [[start.lng, start.lat], [end.lng, end.lat]] }, length_m: null, source: 'straight', snapped: false };
+  });
   // all photos in parallel — one API call each
   const results = await Promise.all(buffers.map(async (buf, i) => {
     // Read GPS / capture time / orientation, then keep only the pixels (plus orientation).
@@ -203,8 +217,13 @@ async function analyseAndSave({ name, start, end }, buffers, onPhoto, hints = []
   }));
 
   const graded = scoring.gradeSegment({ name, start, end }, results);
+  // Snap the clicked points to the footway so the map and route scoring follow the real path.
+  // Runs alongside the photo analysis; on any failure the straight line is stored (never blocks).
+  const snap = await snapPromise;
+  graded.geometry = snap.geometry;
+  if (snap.snapped) graded.length_m = snap.length_m;
   const id = db.saveSegment(graded, results.map((p) => ({ ...p, hazards: p.hazards })));
-  return { ...db.getSegment(id), cost_by_authority: graded.cost_by_authority, photo_results: results };
+  return { ...db.getSegment(id), cost_by_authority: graded.cost_by_authority, photo_results: results, geometry_source: snap.source };
 }
 
 // ---------- API ----------
@@ -215,6 +234,18 @@ app.get('/api/health', (_req, res) => {
 });
 
 app.get('/api/standards', (_req, res) => res.json(scoring.STANDARDS));
+
+// Public, non-secret configuration the frontend needs (tile host, limits). Never the API key.
+app.get('/api/config', (_req, res) => res.json({
+  tile_url: TILE_URL,
+  tile_attribution: TILE_ATTRIBUTION,
+  routing: osrm.OSRM_BASE.includes('router.project-osrm.org') ? 'public-demo' : 'configured',
+  max_photos: MAX_FILES,
+  max_image_px: MAX_IMAGE_PX,
+  max_upload_mb: MAX_UPLOAD_MB,
+  model: vision.MODEL,
+  mock: vision.MOCK,
+}));
 
 app.get('/api/stats', (_req, res) => {
   try { res.json({ ...db.stats(), vision: vision.usage() }); } catch (err) { fail(res, 500, err.message); }
@@ -292,49 +323,24 @@ app.post('/api/segments', segmentLimiter, upload.array('photos', MAX_FILES), asy
 let demoRoute = null;
 try { demoRoute = require('./data/demo-route.json'); } catch { console.warn('[route] no data/demo-route.json'); }
 
-async function fetchProfile(profile, from, to, signal) {
-  const url = `${OSRM_BASE}/route/v1/${profile}/${from.lng},${from.lat};${to.lng},${to.lat}?alternatives=3&overview=full&geometries=geojson&steps=false`;
-  const r = await fetch(url, { signal, headers: { 'User-Agent': 'rasta-footpath-map/0.1' } });
-  if (!r.ok) throw new Error(`OSRM ${profile} ${r.status}`);
-  const json = await r.json();
-  if (json.code !== 'Ok' || !json.routes?.length) throw new Error(`OSRM ${profile} ${json.code || 'no routes'}`);
-  return json.routes;
-}
-
-// The public foot profile almost never returns alternatives, so we ask the
-// driving profile too and keep any route whose length differs by over 4%.
-async function fetchOSRM(from, to) {
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), 3000);
-  try {
-    const settled = await Promise.allSettled(['foot', 'driving'].map((p) => fetchProfile(p, from, to, ctrl.signal)));
-    const routes = [];
-    for (const s of settled) {
-      if (s.status !== 'fulfilled') { console.warn('[route]', s.reason.message); continue; }
-      for (const r of s.value) {
-        if (!routes.some((x) => Math.abs(x.distance - r.distance) / r.distance < 0.04)) routes.push(r);
-      }
-    }
-    if (!routes.length) throw new Error('OSRM returned no routes');
-    return { json: { code: 'Ok', routes: routes.slice(0, 4) }, source: 'osrm' };
-  } finally { clearTimeout(timer); }
-}
-
 app.post('/api/route', routeLimiter, async (req, res) => {
   const from = parsePoint(req.body?.from), to = parsePoint(req.body?.to);
   const persona = ['walk', 'wheelchair', 'senior'].includes(req.body?.persona) ? req.body.persona : 'walk';
   if (!from || !to) return fail(res, 400, 'from and to must be {lat,lng}');
-  let osrm, source, warning = null;
+  let result, source, warning = null;
   try {
-    ({ json: osrm, source } = await fetchOSRM(from, to));
+    ({ json: result, source } = await osrm.fetchAlternatives(from, to));
   } catch (err) {
     console.warn('[route] OSRM failed, using cached demo route:', err.message);
     if (!demoRoute) return fail(res, 502, 'routing service unavailable and no cached route');
-    osrm = demoRoute; source = 'cached'; warning = 'Live routing unavailable, showing the cached demo route';
+    result = demoRoute; source = 'cached'; warning = 'Live routing unavailable, showing the cached demo route';
   }
-  const segments = db.allSegments();
-  const routes = osrm.routes.map((r, i) => {
-    const scored = scoring.scoreRoute(r.geometry.coordinates, segments);
+  // Spatial pre-filter: only segments whose bbox touches the routes' bbox (padded by the match
+  // radius) are loaded, so scoring stays fast at ten thousand segments.
+  const allCoords = result.routes.flatMap((r) => r.geometry.coordinates);
+  const segments = db.segmentsInBbox(scoring.padBbox(scoring.bboxOf(allCoords), ROUTE_RADIUS_M));
+  const routes = result.routes.map((r, i) => {
+    const scored = scoring.scoreRoute(r.geometry.coordinates, segments, { radiusM: ROUTE_RADIUS_M });
     const hazardsOn = scored.segments.flatMap((s) => db.getSegment(s.id).hazards.map((h) => ({ ...h, segment_name: s.name })));
     const worst = hazardsOn.sort((a, b) => b.severity - a.severity)[0] || null;
     const personaFails = scored.segments.filter((s) => !s.verdicts[persona].ok);
@@ -354,7 +360,7 @@ app.post('/api/route', routeLimiter, async (req, res) => {
   const eligible = routes.filter((r) => r.coverage >= 40 && r.score != null);
   const pool = eligible.length ? eligible : routes;
   const recommended = pool.slice().sort((a, b) => (b.score ?? -1) - (a.score ?? -1) || b.coverage - a.coverage || a.distance_m - b.distance_m)[0];
-  res.json({ ok: true, source, warning, persona, routes, recommended_index: recommended ? recommended.index : null });
+  res.json({ ok: true, source, warning, persona, routes, recommended_index: recommended ? recommended.index : null, candidates: segments.length });
 });
 
 // ---------- boot ----------

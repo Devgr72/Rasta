@@ -106,6 +106,29 @@ describe('db', () => {
     assert.equal(db.toGeoJSON().features.length, 2);
   });
 
+  test('segmentsInBbox returns only intersecting segments, using geometry-derived boxes', () => {
+    // a snapped segment whose geometry bulges far east of its start/end
+    const g = scoring.gradeSegment({ name: 'Bulge', start: { lat: 28.70, lng: 77.30 }, end: { lat: 28.701, lng: 77.30 } }, [{ hazards: [] }]);
+    g.geometry = { type: 'LineString', coordinates: [[77.30, 28.70], [77.34, 28.70], [77.34, 28.701], [77.30, 28.701]] };
+    const id3 = db.saveSegment(g, g.photos);
+    const row = db.db.prepare('SELECT min_lng, max_lng, min_lat, max_lat FROM segments WHERE id = ?').get(id3);
+    assert.equal(row.max_lng, 77.34, 'bbox follows the geometry, not just the endpoints');
+    assert.equal(row.min_lat, 28.70);
+    // a box around the bulge only (east of the endpoints) still finds it
+    const east = db.segmentsInBbox({ min_lat: 28.6995, max_lat: 28.7015, min_lng: 77.33, max_lng: 77.35 });
+    assert.deepEqual(east.map((s) => s.id), [id3]);
+    assert.equal(east[0].geometry.coordinates.length, 4, 'geometry comes back parsed');
+    // a box over Kashmere Gate finds the first two but not the bulge
+    const kg = db.segmentsInBbox({ min_lat: 28.66, max_lat: 28.67, min_lng: 77.22, max_lng: 77.24 });
+    assert.deepEqual(kg.map((s) => s.id).sort(), [id, id + 1]);
+    // a box in the ocean finds nothing
+    assert.deepEqual(db.segmentsInBbox({ min_lat: 0, max_lat: 1, min_lng: 0, max_lng: 1 }), []);
+    // straight-line rows got their bbox from the endpoints
+    const first = db.db.prepare('SELECT min_lat, max_lat FROM segments WHERE id = ?').get(id);
+    assert.equal(first.min_lat, 28.6630); assert.equal(first.max_lat, 28.6672);
+    db.db.prepare('DELETE FROM segments WHERE id = ?').run(id3);
+  });
+
   test('deleting a segment cascades to photos and hazards', () => {
     db.db.prepare('DELETE FROM segments WHERE id = ?').run(id);
     assert.equal(db.getSegment(id), null);

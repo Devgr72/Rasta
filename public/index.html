@@ -108,6 +108,7 @@
               <div class="point"><b>B</b><span data-pt="b">end</span></div>
               <span class="points-len" id="points-len"></span>
               <button type="button" class="ghost" id="btn-clear-points">Clear</button>
+              <button type="button" class="ghost gps" id="btn-place-gps" hidden title="Use the location stored in the first and last photo">Place from photo GPS</button>
             </div>
           </div>
 
@@ -237,6 +238,7 @@
 </template>
 
 <script src="/vendor/leaflet/leaflet.js"></script>
+<script src="/vendor/exifr/lite.umd.js"></script>
 <script src="/map.js"></script>
 <script src="/app.js"></script>
 </body>

@@ -14,18 +14,23 @@
   const map = L.map('map', { zoomControl: false, attributionControl: true, preferCanvas: false, tap: true })
     .setView(DELHI, 13);
 
-  // Standard OpenStreetMap raster tiles, no key. A CSS filter on the tile
-  // pane pulls them into the slate register (see .leaflet-tile-pane).
-  const osmTiles = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
-    maxZoom: 19,
-    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
-  });
+  // Raster tiles. The server tells us which host to use (/api/config → RASTA_TILE_URL) because the
+  // public openstreetmap.org tiles are for development only. A CSS filter on the tile pane pulls
+  // any light basemap into the slate register (see .leaflet-tile-pane).
+  const DEFAULT_TILES = { url: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png', attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors' };
+  let tileLayer = null;
   let tileErrors = 0;
-  osmTiles.on('tileerror', () => {
-    tileErrors++;
-    if (tileErrors === 8) window.dispatchEvent(new CustomEvent('rasta:notice', { detail: { text: 'Map tiles are not loading. Check the connection; footpaths still work.', kind: 'error' } }));
-  });
-  osmTiles.addTo(map);
+  function setTiles({ url, attribution, maxZoom = 19 }) {
+    if (tileLayer) { if (tileLayer._url === url) return; map.removeLayer(tileLayer); }
+    tileLayer = L.tileLayer(url, { maxZoom, attribution });
+    tileLayer.on('tileerror', () => {
+      tileErrors++;
+      if (tileErrors === 8) window.dispatchEvent(new CustomEvent('rasta:notice', { detail: { text: 'Map tiles are not loading. Check the connection; footpaths still work.', kind: 'error' } }));
+    });
+    tileLayer.addTo(map);
+  }
+  setTiles(DEFAULT_TILES);
+  fetch('/api/config').then((r) => r.json()).then((c) => { if (c && c.tile_url) setTiles({ url: c.tile_url, attribution: c.tile_attribution || DEFAULT_TILES.attribution }); }).catch(() => {});
 
   // ---------- segments ----------
   const casing = L.layerGroup().addTo(map);
@@ -183,7 +188,7 @@
   function escapeHtml(s) { return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
 
   window.RastaMap = {
-    map, scoreColor, COLORS,
+    map, scoreColor, COLORS, setTiles,
     renderSegments, setLens, select, clearSelection, flyToSegment, fitAll, setOnSelect: (fn) => { onSelect = fn; },
     startPicking, stopPicking, clearPicks, setPicks,
     drawRoutes, clearRoutes, highlightRoute,

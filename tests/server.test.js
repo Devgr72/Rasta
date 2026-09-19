@@ -38,6 +38,15 @@ describe('GET endpoints', () => {
     assert.equal(j.ok, true); assert.equal(j.mock, true); assert.equal(j.model, 'claude-fable-5-1');
     assert.equal(j.storage, 'local'); assert.ok(j.schema_version >= 2);
   });
+  test('/api/config exposes tile + limit settings and nothing secret', async () => {
+    const j = await (await fetch(base + '/api/config')).json();
+    assert.equal(j.tile_url, 'https://tile.openstreetmap.org/{z}/{x}/{y}.png');
+    assert.match(j.tile_attribution, /OpenStreetMap/);
+    assert.equal(j.routing, 'configured', 'OSRM_BASE points at a non-demo host in tests');
+    assert.equal(j.max_photos, 12); assert.equal(j.max_image_px, 6000); assert.equal(j.mock, true);
+    assert.equal(JSON.stringify(j).includes('sk-'), false);
+    assert.equal((await fetch(base + '/vendor/exifr/lite.umd.js')).status, 200);
+  });
   test('/api/standards serves the knowledge file', async () => {
     const j = await (await fetch(base + '/api/standards')).json();
     assert.ok(j.hazard_types.length >= 20);
@@ -138,10 +147,11 @@ describe('POST /api/segments', () => {
     const seg = await r.json();
     assert.equal(seg.photos[0].lat, 28.6605);
     assert.equal(seg.photos[0].lng, 77.2205);
-    assert.equal(seg.photos[0].taken_at, '2026-09-19T05:00:00.000Z');
+    assert.equal(seg.photos[0].taken_at, '2026-09-19T05:00:00Z', 'kept as given');
     assert.equal(seg.photo_results[0].photo_lat, 28.6605);
     assert.equal(seg.geometry.type, 'LineString', 'segments now carry a geometry');
-    assert.deepEqual(seg.geometry.coordinates, [[77.22, 28.66], [77.221, 28.661]], 'straight line until snapping exists');
+    assert.deepEqual(seg.geometry.coordinates, [[77.22, 28.66], [77.221, 28.661]], 'straight line because OSRM is unreachable');
+    assert.equal(seg.geometry_source, 'straight');
     const gj = await (await fetch(base + '/api/segments')).json();
     const f = gj.features.find((x) => x.id === seg.id);
     assert.deepEqual(f.geometry, seg.geometry);
@@ -222,6 +232,9 @@ describe('POST /api/route', () => {
     assert.ok(rt.score != null);
     assert.ok(rt.worst_hazard && rt.worst_hazard.type_id);
     assert.ok(rt.persona_blockers.length > 0, 'wheelchair is blocked on the Kashmere Gate stretch');
+    assert.ok(Number.isInteger(j.candidates) && j.candidates >= 1, 'bbox pre-filter reports how many segments were loaded');
+    const all = (await (await fetch(base + '/api/stats')).json()).segments;
+    assert.ok(j.candidates < all, `only nearby segments loaded (${j.candidates} of ${all})`);
   });
   test('unknown persona falls back to walk', async () => {
     const j = await (await json('POST', '/api/route', { from: { lat: 28.6672, lng: 77.2286 }, to: { lat: 28.6598, lng: 77.2288 }, persona: 'dragon' })).json();

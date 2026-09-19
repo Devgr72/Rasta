@@ -80,6 +80,18 @@ const MIGRATIONS = [
   ALTER TABLE photos ADD COLUMN photo_lng REAL;
   ALTER TABLE photos ADD COLUMN taken_at TEXT;
   `,
+  // 3 — bounding box per segment so route scoring only loads segments near the route
+  `
+  ALTER TABLE segments ADD COLUMN min_lat REAL;
+  ALTER TABLE segments ADD COLUMN min_lng REAL;
+  ALTER TABLE segments ADD COLUMN max_lat REAL;
+  ALTER TABLE segments ADD COLUMN max_lng REAL;
+  UPDATE segments SET
+    min_lat = MIN(start_lat, end_lat), max_lat = MAX(start_lat, end_lat),
+    min_lng = MIN(start_lng, end_lng), max_lng = MAX(start_lng, end_lng)
+    WHERE min_lat IS NULL;
+  CREATE INDEX IF NOT EXISTS idx_segments_bbox ON segments(min_lat, max_lat, min_lng, max_lng);
+  `,
 ];
 
 function migrate(conn, migrations = MIGRATIONS) {
@@ -110,9 +122,14 @@ migrate(db);
 const q = {
   insertSegment: db.prepare(`INSERT INTO segments
     (name, start_lat, start_lng, end_lat, end_lng, length_m, score, walk_ok, wheelchair_ok, senior_ok,
-     walk_reason, wheelchair_reason, senior_reason, clear_width_m, surface_type, total_cost_inr, geometry, created_at)
+     walk_reason, wheelchair_reason, senior_reason, clear_width_m, surface_type, total_cost_inr, geometry,
+     min_lat, min_lng, max_lat, max_lng, created_at)
     VALUES (@name, @start_lat, @start_lng, @end_lat, @end_lng, @length_m, @score, @walk_ok, @wheelchair_ok, @senior_ok,
-     @walk_reason, @wheelchair_reason, @senior_reason, @clear_width_m, @surface_type, @total_cost_inr, @geometry, @created_at)`),
+     @walk_reason, @wheelchair_reason, @senior_reason, @clear_width_m, @surface_type, @total_cost_inr, @geometry,
+     @min_lat, @min_lng, @max_lat, @max_lng, @created_at)`),
+  segmentsInBbox: db.prepare(`SELECT s.*, (SELECT COUNT(*) FROM hazards h WHERE h.segment_id = s.id) AS hazard_count,
+    (SELECT COUNT(*) FROM photos p WHERE p.segment_id = s.id) AS photo_count FROM segments s
+    WHERE s.max_lat >= @min_lat AND s.min_lat <= @max_lat AND s.max_lng >= @min_lng AND s.min_lng <= @max_lng ORDER BY s.id`),
   insertPhoto: db.prepare(`INSERT INTO photos (segment_id, filename, hash, width_m, observations, status, photo_lat, photo_lng, taken_at, created_at)
     VALUES (@segment_id, @filename, @hash, @width_m, @observations, @status, @photo_lat, @photo_lng, @taken_at, @created_at)`),
   cachedResult: db.prepare(`SELECT result FROM vision_calls WHERE hash = ? AND result IS NOT NULL ORDER BY id DESC LIMIT 1`),
@@ -152,7 +169,15 @@ const now = () => new Date().toISOString();
 
 /** Persist a fully graded segment (output of scoring.gradeSegment) plus its photos and hazards. */
 const saveSegment = db.transaction((graded, photos) => {
+  const coords = graded.geometry && Array.isArray(graded.geometry.coordinates) && graded.geometry.coordinates.length >= 2
+    ? graded.geometry.coordinates : [[graded.start.lng, graded.start.lat], [graded.end.lng, graded.end.lat]];
+  const bbox = { min_lat: Infinity, min_lng: Infinity, max_lat: -Infinity, max_lng: -Infinity };
+  for (const [lng, lat] of coords) {
+    bbox.min_lat = Math.min(bbox.min_lat, lat); bbox.max_lat = Math.max(bbox.max_lat, lat);
+    bbox.min_lng = Math.min(bbox.min_lng, lng); bbox.max_lng = Math.max(bbox.max_lng, lng);
+  }
   const info = q.insertSegment.run({
+    ...bbox,
     name: graded.name,
     start_lat: graded.start.lat, start_lng: graded.start.lng,
     end_lat: graded.end.lat, end_lng: graded.end.lng,
@@ -264,6 +289,11 @@ function allSegments() {
   return q.allSegments.all().map(rowToSegment);
 }
 
+/** Segments whose bounding box intersects the given one — the spatial pre-filter for route scoring. */
+function segmentsInBbox(bbox) {
+  return q.segmentsInBbox.all(bbox).map(rowToSegment);
+}
+
 function toGeoJSON() {
   return {
     type: 'FeatureCollection',
@@ -341,6 +371,6 @@ const deleteSegment = db.transaction((id) => {
 
 module.exports = {
   db, migrate, MIGRATIONS, setUrlBuilder,
-  saveSegment, getSegment, allSegments, toGeoJSON, stats, isEmpty, deleteSegment,
+  saveSegment, getSegment, allSegments, segmentsInBbox, toGeoJSON, stats, isEmpty, deleteSegment,
   recordVisionCall, cachedVisionResult, visionUsage,
 };

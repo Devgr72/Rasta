@@ -73,8 +73,10 @@ it never reaches the browser.
 | `RASTA_S3_PUBLIC_URL` | `lib/storage.js` | unset | Public/CDN base for photo URLs. Unset → the server proxies `/uploads/<name>` from the bucket so URLs are identical under both drivers |
 | `RASTA_S3_FORCE_PATH_STYLE` | `lib/storage.js` | auto | `1`/`0` to override path- vs virtual-host-style addressing |
 | `PORT` | `server.js` | `3000` | HTTP port |
-| `OSRM_BASE` | `server.js` | `https://router.project-osrm.org` | OSRM routing server base URL |
-| `RASTA_TILE_URL` | `server.js` | OSM tile URL template | Tile host; its origin is added to the CSP `img-src` |
+| `OSRM_BASE` | `lib/osrm.js` | `https://router.project-osrm.org` | OSRM server for snapping and route alternatives. **The default is the public demo — development only.** See Routing and tiles |
+| `OSRM_TIMEOUT_MS` | `lib/osrm.js` | `3000` | Hard timeout per OSRM call; on expiry the straight line / cached route is used |
+| `RASTA_TILE_ATTRIBUTION` | `server.js` | OSM attribution | HTML attribution string shown on the map for the configured tile host |
+| `RASTA_TILE_URL` | `server.js` | `https://tile.openstreetmap.org/{z}/{x}/{y}.png` | Raster tile URL template served to the browser via `/api/config`; its origin is added to the CSP `img-src`. **Default is OSM's public tiles — development only** |
 | `RASTA_VISION_CONCURRENCY` | `vision.js` | `4` | Max model calls in flight across all requests |
 | `RASTA_DAILY_TOKEN_BUDGET` | `vision.js` | unlimited | Input + output tokens allowed per UTC day. Once reached, uncached photos return zero hazards with `meta.error = "daily budget reached"` |
 | `RASTA_RATE_LIMIT_SEGMENTS` | `server.js` | `30` | `POST /api/segments` per IP per window. `0` disables |
@@ -113,10 +115,11 @@ All responses are JSON. Fields are only ever added, never renamed or removed.
 | `GET` | `/api/health` | `{ok, model, mock, concurrency, daily_token_budget, budget_reached}` |
 | `GET` | `/api/stats` | `{segments, hazards, km_covered, avg_score, total_cost_inr, wheelchair_ok_count, senior_ok_count, vision:{today, total, budget, budget_reached, concurrency}}` — token usage per UTC day and overall |
 | `GET` | `/api/standards` | The knowledge file |
+| `GET` | `/api/config` | Non-secret frontend settings: `tile_url`, `tile_attribution`, `routing` (`public-demo` or `configured`), `max_photos`, `max_image_px`, `max_upload_mb`, `model`, `mock` |
 | `GET` | `/api/segments` | GeoJSON `FeatureCollection`; each feature's `properties` is a segment summary |
 | `GET` | `/api/segments/:id` | One segment with `geometry`, `photos[]` (each with `url, lat, lng, taken_at`), `hazards[]` and `verdicts` |
-| `POST` | `/api/segments` | Create a segment. Multipart `name, start, end, photos[]` (up to 12), or JSON `{name, start, end, photos:[dataURL]}`. Runs vision on every photo in parallel, scores, persists, returns the graded segment with `201`. Optional `photo_meta` (JSON array of `{lat,lng,taken_at}` aligned with the photos). Add `?stream=1` for NDJSON: `{type:"start"}`, one `{type:"photo"}` per result as it lands, then `{type:"segment"}` |
-| `POST` | `/api/route` | `{from:{lat,lng}, to:{lat,lng}, persona}` → OSRM alternatives scored against walked segments, with `coverage`, `worst_hazard`, `persona_blockers` and `recommended_index`. Falls back to `data/demo-route.json` if OSRM fails or exceeds 3 s |
+| `POST` | `/api/segments` | Create a segment. Multipart `name, start, end, photos[]` (up to 12), or JSON `{name, start, end, photos:[dataURL]}`. Runs vision on every photo in parallel while the two points are snapped to the footway with OSRM (`match` → `route` → straight line), scores, persists, returns the graded segment with `201` plus `geometry` and `geometry_source` (`osrm-match`, `osrm-route` or `straight`). Optional `photo_meta` (JSON array of `{lat,lng,taken_at}` aligned with the photos). Add `?stream=1` for NDJSON: `{type:"start"}`, one `{type:"photo"}` per result as it lands, then `{type:"segment"}` |
+| `POST` | `/api/route` | `{from:{lat,lng}, to:{lat,lng}, persona}` → OSRM alternatives scored against walked segments, with `coverage`, `worst_hazard`, `persona_blockers`, `recommended_index` and `candidates` (segments loaded by the bbox pre-filter). Falls back to `data/demo-route.json` if OSRM fails or exceeds 3 s |
 | `DELETE` | `/api/segments/:id` | Takedown. Only exists when `RASTA_ADMIN_TOKEN` is set; needs `Authorization: Bearer <token>`. Cascades to photos and hazards and removes orphaned upload files |
 
 ### Storage, cache and schema
@@ -142,9 +145,42 @@ width is under 1.2 m, 25 if under 0.9 m. Floor at 5.
 Persona verdicts fail when any hazard's persona risk is 4 or more. Wheelchair also fails on clear width
 under 1.2 m or any `no_kerb_ramp` hazard. Every fail names the blocking hazard.
 
-Routes are sampled every 25 m; graded segments within 40 m contribute their score weighted by length.
-Coverage is the share of samples that found data. Under 40% coverage a route is drawn grey and labelled
-"no data", never guessed.
+Routes are sampled every 25 m; a sample counts as covered when it lies within 40 m of a graded
+segment's **stored footway polyline** (point-to-polyline distance, not the segment midpoint), and each
+matched segment contributes its score weighted by length. Coverage is the share of samples that found
+data. Under 40% coverage a route is drawn grey and labelled "no data", never guessed. Only segments
+whose bounding box touches the route's (padded by 40 m) are loaded, so scoring stays fast at ten
+thousand segments (`tests/perf.test.js` asserts this).
+
+## Routing and tiles
+
+**Licensing.** The public OSRM demo server (`router.project-osrm.org`) and OpenStreetMap's tile servers
+(`tile.openstreetmap.org`) are community resources for development and light use. Neither is licensed
+for production traffic (see the [OSRM demo policy](https://github.com/Project-OSRM/osrm-backend/wiki/Demo-server)
+and the [OSM tile usage policy](https://operations.osmfoundation.org/policies/tiles/)). For a deployment,
+set:
+
+- `OSRM_BASE` — your own OSRM (below), or a hosted routing API that speaks the OSRM HTTP protocol.
+- `RASTA_TILE_URL` and `RASTA_TILE_ATTRIBUTION` — a tile provider you have an agreement with (MapTiler,
+  Stadia, Thunderforest, a self-hosted tileserver…). The URL template is served to the browser through
+  `/api/config`; its host is added to the Content-Security-Policy automatically.
+
+`/api/config` reports `routing: "public-demo"` while the default OSRM host is in use.
+
+**Self-hosted OSRM (Delhi, foot profile).** Docker required.
+
+```bash
+sh scripts/osrm-prepare.sh                    # download a Delhi-covering extract, run extract/partition/customize → ./osrm-data
+docker compose --profile routing up -d osrm   # http://localhost:5000
+OSRM_BASE=http://localhost:5000 npm start     # or set OSRM_BASE=http://osrm:5000 for the app container
+```
+
+The default extract is Geofabrik's northern-zone India file (~350 MB, 10–20 min of preprocessing,
+4–6 GB RAM). Set `OSRM_PBF_URL` to any smaller `.osm.pbf` that covers Delhi to speed this up.
+
+**Photo GPS.** When uploaded photos carry EXIF GPS, the Contribute tab offers "Place from photo GPS",
+which drops A and B on the first and last geotagged photo (ordered by capture time). Two map taps
+remain the fallback and the markers stay draggable.
 
 ## Running the evals
 

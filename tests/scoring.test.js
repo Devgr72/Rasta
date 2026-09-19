@@ -176,4 +176,63 @@ describe('scoreRoute', () => {
     const r = scoreRoute([[lng, 28.66]], [A]);
     assert.equal(r.samples, 1);
   });
+
+  // Point-to-polyline matching (Phase 5): the stored footway geometry is what counts, not the midpoint.
+  test('a segment whose snapped geometry hugs the route is matched even when its midpoint is far away', () => {
+    // A U-shaped footway: start/end both on the route, geometry bulges 300 m east in the middle.
+    const U = {
+      id: 9, name: 'U', score: 60, verdicts: {},
+      start: { lat: 28.6620, lng: lng }, end: { lat: 28.6660, lng: lng },
+      geometry: { type: 'LineString', coordinates: [[lng, 28.6620], [lng + 0.003, 28.6620], [lng + 0.003, 28.6660], [lng, 28.6660]] },
+    };
+    U.length_m = Math.round(scoring.polylineLength(U.geometry.coordinates));
+    const r = scoreRoute(line, [U]);
+    // only the two short legs touching the route are within 40 m → a handful of samples
+    assert.ok(r.coverage > 0 && r.coverage < 20, `coverage ${r.coverage}`);
+    assert.deepEqual(r.segments.map((s) => s.id), [9]);
+    // by contrast, the old midpoint rule would have matched the whole ~450 m reach
+  });
+  test('a parallel footway 60 m away is not matched at 40 m, but is at 80 m', () => {
+    const dLng = 60 / (111320 * Math.cos((28.665 * Math.PI) / 180));
+    const P = { id: 10, name: 'P', score: 90, verdicts: {}, start: { lat: 28.6600, lng: lng + dLng }, end: { lat: 28.6690, lng: lng + dLng }, length_m: 1000,
+      geometry: { type: 'LineString', coordinates: [[lng + dLng, 28.6600], [lng + dLng, 28.6690]] } };
+    assert.equal(scoreRoute(line, [P]).coverage, 0);
+    assert.equal(scoreRoute(line, [P], { radiusM: 80 }).coverage, 100);
+  });
+  test('segments without geometry fall back to the straight start→end line', () => {
+    const r = scoreRoute(line, [{ ...A, geometry: null }]);
+    assert.ok(r.coverage > 15 && r.coverage < 30);
+  });
+});
+
+describe('geometry helpers', () => {
+  const { polylineLength, bboxOf, padBbox, pointToPolylineM, segmentCoords } = scoring;
+  test('polylineLength sums haversine legs', () => {
+    const l = polylineLength([[77.23, 28.66], [77.23, 28.669], [77.231, 28.669]]);
+    assert.ok(l > 1090 && l < 1110, `${l}`);
+    assert.equal(polylineLength([[77.23, 28.66]]), 0);
+  });
+  test('bboxOf and padBbox', () => {
+    const b = bboxOf([[77.23, 28.66], [77.20, 28.67], [77.25, 28.65]]);
+    assert.deepEqual(b, { min_lat: 28.65, min_lng: 77.20, max_lat: 28.67, max_lng: 77.25 });
+    const p = padBbox(b, 1000);
+    assert.ok(Math.abs((b.min_lat - p.min_lat) * 110540 - 1000) < 1);
+    assert.ok(p.max_lng > b.max_lng && p.min_lng < b.min_lng);
+  });
+  test('pointToPolylineM: on the line, off the end, and beside the middle', () => {
+    const coords = [[77.23, 28.66], [77.23, 28.67]]; // ~1.1 km north-south
+    assert.ok(pointToPolylineM({ lat: 28.665, lng: 77.23 }, coords) < 0.01);
+    const beside = pointToPolylineM({ lat: 28.665, lng: 77.2310 }, coords); // ~98 m east
+    assert.ok(beside > 95 && beside < 101, `${beside}`);
+    const past = pointToPolylineM({ lat: 28.671, lng: 77.23 }, coords); // ~110 m past the north end
+    assert.ok(past > 108 && past < 113, `${past}`);
+    assert.equal(pointToPolylineM({ lat: 0, lng: 0 }, []), Infinity);
+    assert.ok(pointToPolylineM({ lat: 28.66, lng: 77.23 }, [[77.23, 28.66]]) < 0.01, 'single vertex');
+  });
+  test('segmentCoords prefers stored geometry', () => {
+    const s = { start: { lat: 1, lng: 2 }, end: { lat: 3, lng: 4 } };
+    assert.deepEqual(segmentCoords(s), [[2, 1], [4, 3]]);
+    assert.deepEqual(segmentCoords({ ...s, geometry: { type: 'LineString', coordinates: [[9, 9], [8, 8], [7, 7]] } }), [[9, 9], [8, 8], [7, 7]]);
+    assert.deepEqual(segmentCoords({ ...s, geometry: { type: 'LineString', coordinates: [[9, 9]] } }), [[2, 1], [4, 3]], 'degenerate geometry ignored');
+  });
 });
