@@ -21,3 +21,4 @@ public/demo/*
 
 # self-hosted OSRM graph (built by scripts/osrm-prepare.sh)
 osrm-data/
+data/certs/

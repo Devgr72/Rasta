@@ -73,6 +73,7 @@ it never reaches the browser.
 | `RASTA_S3_PUBLIC_URL` | `lib/storage.js` | unset | Public/CDN base for photo URLs. Unset → the server proxies `/uploads/<name>` from the bucket so URLs are identical under both drivers |
 | `RASTA_S3_FORCE_PATH_STYLE` | `lib/storage.js` | auto | `1`/`0` to override path- vs virtual-host-style addressing |
 | `PORT` | `server.js` | `3000` | HTTP port |
+| `HOST` | `server.js` | `0.0.0.0` | Bind address. The default listens on every interface so a phone on the same Wi-Fi can open `http://<laptop-ip>:3000`; the boot log prints those URLs. Set `127.0.0.1` to keep it local |
 | `OSRM_BASE` | `lib/osrm.js` | `https://router.project-osrm.org` | OSRM server for snapping and route alternatives. **The default is the public demo — development only.** See Routing and tiles |
 | `OSRM_TIMEOUT_MS` | `lib/osrm.js` | `3000` | Hard timeout per OSRM call; on expiry the straight line / cached route is used |
 | `RASTA_GEOCODER_URL` | `lib/geocode.js` | public Nominatim | Nominatim-compatible geocoder for the Route tab place search. **Default is the public server — development only** |

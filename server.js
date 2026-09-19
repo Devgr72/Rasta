@@ -1,5 +1,6 @@
 // server.js — Express app, all routes. Static frontend from /public.
 require('dotenv').config({ quiet: true });
+const os = require('os');
 const path = require('path');
 const express = require('express');
 const multer = require('multer');
@@ -21,6 +22,7 @@ const sentry = createSentry({ release: process.env.SENTRY_RELEASE || `rasta@${pk
 sentry.installProcessHandlers();
 
 const PORT = Number(process.env.PORT) || 3000;
+const HOST = process.env.HOST || '0.0.0.0'; // all interfaces so phones on the same Wi-Fi can reach the laptop
 const UPLOAD_DIR = process.env.RASTA_UPLOAD_DIR || path.join(__dirname, 'uploads');
 const TILE_URL = process.env.RASTA_TILE_URL || 'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
 const TILE_ATTRIBUTION = process.env.RASTA_TILE_ATTRIBUTION || '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors';
@@ -704,11 +706,37 @@ app.use((err, req, res, _next) => {
   fail(res, 500, 'server error', { request_id: req.id });
 });
 
-function start(port = PORT) {
+function lanAddresses() {
+  const out = [];
+  for (const addrs of Object.values(os.networkInterfaces())) {
+    for (const a of addrs || []) if (a.family === 'IPv4' && !a.internal) out.push(a.address);
+  }
+  return out;
+}
+
+// TLS is optional. Off the laptop, browsers only allow geolocation, the camera stream and the
+// service worker on https, so phones on the same Wi-Fi need it. `scripts/lan.sh` makes a
+// locally trusted certificate with mkcert; RASTA_TLS_CERT / RASTA_TLS_KEY point at any other pair.
+function tlsOptions() {
+  const fs = require('fs');
+  const cert = process.env.RASTA_TLS_CERT || path.join(__dirname, 'data', 'certs', 'cert.pem');
+  const key = process.env.RASTA_TLS_KEY || path.join(__dirname, 'data', 'certs', 'key.pem');
+  if (process.env.RASTA_TLS === '0') return null;
+  if (!fs.existsSync(cert) || !fs.existsSync(key)) return null;
+  try { return { cert: fs.readFileSync(cert), key: fs.readFileSync(key) }; } catch (err) { console.warn('[tls] could not read certificate:', err.message); return null; }
+}
+
+function start(port = PORT, host = HOST) {
   seedIfEmpty();
-  return app.listen(port, () => {
-    console.log(`Rasta on http://localhost:${port}  model=${vision.MODEL}${vision.MOCK ? ' (MOCK vision — add ANTHROPIC_API_KEY to .env)' : ''}`);
-    logger.info({ port, version: pkg.version, model: vision.MODEL, mock: vision.MOCK, storage: storage.kind, osrm: osrm.OSRM_BASE, sentry: sentry.enabled, schema_version: db.MIGRATIONS.length }, 'rasta started');
+  const tls = tlsOptions();
+  const scheme = tls ? 'https' : 'http';
+  const server = tls ? require('https').createServer(tls, app) : require('http').createServer(app);
+  return server.listen(port, host, () => {
+    const suffix = `  model=${vision.MODEL}${vision.MOCK ? ' (MOCK vision — add ANTHROPIC_API_KEY to .env)' : ''}`;
+    console.log(`Rasta on ${scheme}://localhost:${port}${suffix}`);
+    if (host === '0.0.0.0' || host === '::') for (const ip of lanAddresses()) console.log(`         ${scheme}://${ip}:${port}  (same Wi-Fi)`);
+    if (!tls && (host === '0.0.0.0' || host === '::')) console.log('         tip: run scripts/lan.sh for https, which phones need for location and offline mode');
+    logger.info({ port, host, tls: !!tls, version: pkg.version, model: vision.MODEL, mock: vision.MOCK, storage: storage.kind, osrm: osrm.OSRM_BASE, sentry: sentry.enabled, schema_version: db.MIGRATIONS.length }, 'rasta started');
   });
 }
 
