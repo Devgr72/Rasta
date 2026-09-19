@@ -7,7 +7,7 @@
     "start": "node server.js",
     "dev": "node --watch server.js",
     "mock": "node scripts/mock.js",
-    "test": "node --test tests/",
+    "test": "node scripts/test.js",
     "test:vision": "node test-vision.js",
     "eval": "node evals/run.js",
     "lint": "node scripts/lint.js",

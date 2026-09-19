@@ -41,7 +41,7 @@ and no tokens are spent. Force it with `npm run mock` or `RASTA_MOCK_VISION=1`.
 | `npm start` | Run the server |
 | `npm run dev` | Run with `node --watch` (restarts on file change) |
 | `npm run mock` | Run with mock vision, cross-platform |
-| `npm test` | Unit and API tests (`node:test`, no extra dependency) |
+| `npm test` | Unit and API tests (`node:test`, no extra dependency). `npm test scoring` runs one suite |
 | `npm run lint` | `node --check` on every `.js` file |
 | `npm run eval` | Score vision output against `evals/cases.json` |
 | `npm run test:vision -- photo.jpg` | One photo in, hazard JSON out |
@@ -62,6 +62,8 @@ it never reaches the browser.
 | `RASTA_MODEL` | `vision.js` | `claude-fable-5-1` | Model id for the vision audit |
 | `RASTA_MOCK_VISION` | `vision.js` | — | `1` forces deterministic mock results, no API calls |
 | `RASTA_DB` | `db.js` | `data/rasta.db` | SQLite file path (`:memory:` works for tests) |
+| `RASTA_UPLOAD_DIR` | `server.js` | `uploads/` | Where photo files are written |
+| `RASTA_VISION_CACHE_DIR` | `vision.js` | `data/vision-cache/` | Where vision results are cached by photo hash |
 | `PORT` | `server.js` | `3000` | HTTP port |
 | `OSRM_BASE` | `server.js` | `https://router.project-osrm.org` | OSRM routing server base URL |
 | `BASE` | `scripts/*.js` | `http://localhost:3000` | Target for the browser scripts |

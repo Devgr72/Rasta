@@ -9,7 +9,7 @@ const scoring = require('./scoring');
 const vision = require('./vision');
 
 const PORT = Number(process.env.PORT) || 3000;
-const UPLOAD_DIR = path.join(__dirname, 'uploads');
+const UPLOAD_DIR = process.env.RASTA_UPLOAD_DIR || path.join(__dirname, 'uploads');
 const OSRM_BASE = process.env.OSRM_BASE || 'https://router.project-osrm.org';
 fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 

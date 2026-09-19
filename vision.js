@@ -8,7 +8,7 @@ const Anthropic = require('@anthropic-ai/sdk');
 
 const STANDARDS = require('./knowledge/standards.json');
 const MODEL = process.env.RASTA_MODEL || 'claude-fable-5-1';
-const CACHE_DIR = path.join(__dirname, 'data', 'vision-cache');
+const CACHE_DIR = process.env.RASTA_VISION_CACHE_DIR || path.join(__dirname, 'data', 'vision-cache');
 const HAZARD_IDS = new Set(STANDARDS.hazard_types.map((h) => h.id));
 const SURFACES = new Set(['paver', 'concrete', 'none', 'mud', 'asphalt', 'stone']);
 const MOCK = process.env.RASTA_MOCK_VISION === '1' || !process.env.ANTHROPIC_API_KEY;

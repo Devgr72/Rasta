@@ -1,0 +1,7 @@
+# Normalise line endings so Docker builds and shell scripts behave the same on every OS.
+* text=auto eol=lf
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.webp binary
+*.db binary
