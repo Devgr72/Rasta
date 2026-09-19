@@ -380,3 +380,33 @@ body.map-light .ledger-status { background: #fff; }
 .also small { color: var(--ink-faint); }
 .seg-actions .primary { flex: 1; width: auto; min-height: 44px; padding: 10px 14px; font-size: 14px; }
 @media (max-width: 860px) { .import-btn { align-self: stretch; justify-content: center; } .import-btn span { font-size: 12px; } .legend span:last-child { display: none; } }
+
+/* open photos */
+.open-photos { margin-top: 12px; }
+.open-photos .ghost { width: 100%; gap: 8px; }
+.open-photos .ghost svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.7; }
+.open-photos .ghost.is-busy svg { animation: spin 1.2s linear infinite; }
+.open-list { margin-top: 10px; }
+.open-list p { font-size: 12px; color: var(--ink-dim); margin-bottom: 8px; }
+.open-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.open-pick { position: relative; aspect-ratio: 4/3; border-radius: 2px; overflow: hidden; border: 2px solid transparent; background: var(--slate-800); cursor: pointer; padding: 0; }
+.open-pick img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.open-pick.is-on { border-color: var(--amber); }
+.open-pick .tick { position: absolute; top: 6px; right: 6px; width: 20px; height: 20px; border-radius: 50%; background: var(--amber); color: var(--slate-900); display: none; place-items: center; font-size: 12px; font-weight: 700; }
+.open-pick.is-on .tick { display: grid; }
+.open-pick .d { position: absolute; left: 6px; bottom: 6px; font-size: 10px; background: rgba(15,23,42,.85); color: var(--ink-dim); padding: 1px 5px; border-radius: 2px; }
+.open-actions { display: grid; grid-template-columns: 1fr auto; gap: 8px; margin-top: 10px; }
+.open-actions .primary { min-height: 46px; font-size: 14px; }
+.shot figcaption, .shot .credit { position: absolute; left: 0; right: 0; bottom: 0; background: rgba(15,23,42,.82); color: var(--ink-dim); font-size: 11px; padding: 5px 8px; line-height: 1.3; }
+.shot .credit a { color: var(--ink); }
+.shot.is-scanning .credit { display: none; }
+
+/* framed photo: image box with the credit underneath, boxes stay inside the image */
+.shot.framed { aspect-ratio: auto; display: flex; flex-direction: column; }
+.shot.framed .img-wrap { position: relative; aspect-ratio: 4/3; overflow: hidden; }
+.shot.framed .img-wrap img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.shot.framed .credit { position: static; background: var(--slate-800); }
+.box.num span { left: -1px; top: -1px; margin: 0; min-width: 18px; height: 18px; display: grid; place-items: center; padding: 0 4px; font-size: 11px; border-radius: 0 0 3px 0; }
+.box.num.flip span { top: -1px; bottom: auto; }
+.hz-sev { position: relative; }
+.hz-n { position: absolute; right: -6px; top: -6px; min-width: 16px; height: 16px; border-radius: 8px; background: var(--slate-900); color: var(--ink); font-size: 10px; display: grid; place-items: center; padding: 0 4px; border: 1px solid var(--slate-600); }

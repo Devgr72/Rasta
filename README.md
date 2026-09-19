@@ -48,6 +48,17 @@ draw thinner, say "graded from OpenStreetMap tags" in the panel, link to the OSM
 When someone marks a stretch that is already mapped, the Walk tab says so and lists the earlier
 readings. The segment panel shows "Also mapped here" for every other reading within 60 m.
 
+## Open photos
+
+Two ways real photographs reach the map without anyone walking:
+
+- **Find open photos of this stretch** on the Walk tab searches Wikimedia Commons for geotagged,
+  freely licensed photos taken along the marked stretch (and Mapillary street-level imagery when
+  `MAPILLARY_TOKEN` is set). Pick the ones that show the footpath and they are graded exactly like
+  uploads. Author, licence and a link back are stored with every photo and shown under it.
+- `POST /api/segments/from-open-photos` does the same from a script. Five Delhi stretches on the map
+  were seeded this way from Commons photos by Biswarup Ganguly, Harshanh and Sidheeq.
+
 ## Map styles
 
 Dark and Light are vector tiles from OpenFreeMap (free, no key) rendered by MapLibre inside Leaflet.
@@ -80,6 +91,9 @@ evals/           cases.json ground truth + run.js
 | GET | `/api/segments/near?lat&lng&r` | readings within `r` metres, nearest first |
 | POST | `/api/import/osm` | `{south,west,north,east}` -> grades tagged OSM ways in the box, deduplicated by way id |
 | GET | `/api/config` | browser-safe config (Google key if set) |
+| GET | `/api/photos/open?lat&lng&lat2&lng2` | openly licensed photos near a point or stretch, with credits |
+| POST | `/api/segments/from-open-photos` | `{start,end,name,photos:[{url,credit,license,page,source}]}`; `?stream=1` for NDJSON |
+| GET | `/api/img?u=` | image proxy for an allow-list of open photo hosts |
 
 ## Scoring
 

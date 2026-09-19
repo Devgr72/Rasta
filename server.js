@@ -63,7 +63,7 @@ function collectPhotoBuffers(req) {
   return out;
 }
 
-async function analyseAndSave({ name, start, end }, buffers, onPhoto) {
+async function analyseAndSave({ name, start, end, source }, buffers, onPhoto, credits = []) {
   // all photos in parallel — one API call each
   const results = await Promise.all(buffers.map(async (buf, i) => {
     let r;
@@ -89,12 +89,13 @@ async function analyseAndSave({ name, start, end }, buffers, onPhoto) {
       error: r.meta.error || null,
       latency_ms: r.meta.latency_ms,
       cached: !!r.meta.cached,
+      ...(credits[i] || {}),
     };
     if (onPhoto) onPhoto(photo);
     return photo;
   }));
 
-  const graded = scoring.gradeSegment({ name, start, end }, results);
+  const graded = scoring.gradeSegment({ name, start, end, source: source || 'walk' }, results);
   const id = db.saveSegment(graded, results.map((p) => ({ ...p, hazards: p.hazards })));
   return { ...db.getSegment(id), cost_by_authority: graded.cost_by_authority, photo_results: results };
 }
@@ -166,6 +167,124 @@ app.post('/api/segments', upload.array('photos', 12), async (req, res) => {
     console.error('[segment] failed', err);
     if (stream) { res.write(JSON.stringify({ type: 'error', error: err.message }) + '\n'); return res.end(); }
     fail(res, 500, `analysis failed: ${err.message}`);
+  }
+});
+
+// ---------- open photos: Wikimedia Commons (no key) + Mapillary (token) ----------
+const COMMONS_UA = 'rasta-footpath-map/0.1 (dev@inspiringseniors.org)';
+
+async function fetchJson(url, opts = {}, ms = 15000) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), ms);
+  try {
+    const r = await fetch(url, { ...opts, signal: ctrl.signal, headers: { 'User-Agent': COMMONS_UA, ...(opts.headers || {}) } });
+    if (!r.ok) throw new Error(`${r.status} from ${new URL(url).host}`);
+    return await r.json();
+  } finally { clearTimeout(timer); }
+}
+
+// Photos on Commons within r metres of a point, with licence and author.
+async function commonsNear(p, r = 150, limit = 12) {
+  const geo = await fetchJson(`https://commons.wikimedia.org/w/api.php?action=query&list=geosearch&gscoord=${p.lat}|${p.lng}&gsradius=${Math.round(Math.min(10000, Math.max(10, r)))}&gsnamespace=6&gslimit=${limit * 2}&format=json`);
+  const titles = (geo.query?.geosearch || []).filter((g) => /\.(jpe?g|png)$/i.test(g.title)).slice(0, limit);
+  if (!titles.length) return [];
+  const info = await fetchJson(`https://commons.wikimedia.org/w/api.php?action=query&titles=${encodeURIComponent(titles.map((t) => t.title).join('|'))}&prop=imageinfo&iiprop=url|extmetadata|size&iiurlwidth=1280&format=json`);
+  const byTitle = Object.fromEntries(Object.values(info.query?.pages || {}).map((pg) => [pg.title, pg]));
+  const strip = (h) => String(h || '').replace(/<[^>]+>/g, '').trim();
+  return titles.map((t) => {
+    const pg = byTitle[t.title]; const ii = pg?.imageinfo?.[0]; if (!ii) return null;
+    const m = ii.extmetadata || {};
+    return {
+      source: 'commons', title: t.title.replace(/^File:/, ''), url: ii.thumburl || ii.url, page: ii.descriptionurl,
+      credit: strip(m.Artist?.value) || 'Wikimedia Commons contributor', license: m.LicenseShortName?.value || 'see source',
+      lat: t.lat, lng: t.lon, distance_m: Math.round(t.dist),
+    };
+  }).filter(Boolean);
+}
+
+// Street-level photos from Mapillary along a bbox. Only when MAPILLARY_TOKEN is set.
+async function mapillaryNear(bbox, limit = 12) {
+  const token = process.env.MAPILLARY_TOKEN;
+  if (!token) return [];
+  const url = `https://graph.mapillary.com/images?access_token=${encodeURIComponent(token)}&fields=id,thumb_1024_url,computed_geometry,captured_at,creator&bbox=${bbox.west},${bbox.south},${bbox.east},${bbox.north}&limit=${limit}`;
+  const data = await fetchJson(url);
+  return (data.data || []).filter((d) => d.thumb_1024_url).map((d) => ({
+    source: 'mapillary', title: `Mapillary ${d.id}`, url: d.thumb_1024_url, page: `https://www.mapillary.com/app/?pKey=${d.id}`,
+    credit: d.creator?.username ? `${d.creator.username} on Mapillary` : 'Mapillary contributor', license: 'CC BY-SA 4.0',
+    lat: d.computed_geometry?.coordinates?.[1], lng: d.computed_geometry?.coordinates?.[0], captured_at: d.captured_at,
+  }));
+}
+
+function bboxAround(a, b, padM = 60) {
+  const dLat = padM / 111320, dLng = padM / (111320 * Math.cos((a.lat * Math.PI) / 180));
+  return { south: Math.min(a.lat, b.lat) - dLat, north: Math.max(a.lat, b.lat) + dLat, west: Math.min(a.lng, b.lng) - dLng, east: Math.max(a.lng, b.lng) + dLng };
+}
+
+// GET /api/photos/open?lat&lng[&lat2&lng2]&r -> openly licensed photos near a point or along a stretch
+app.get('/api/photos/open', async (req, res) => {
+  const a = parsePoint({ lat: req.query.lat, lng: req.query.lng });
+  const b = parsePoint({ lat: req.query.lat2, lng: req.query.lng2 }) || a;
+  if (!a) return fail(res, 400, 'lat and lng required');
+  const r = Math.min(2000, Math.max(30, Number(req.query.r) || 150));
+  const mid = { lat: (a.lat + b.lat) / 2, lng: (a.lng + b.lng) / 2 };
+  const results = await Promise.allSettled([commonsNear(mid, Math.max(r, scoring.haversine(a, b) / 2 + 60)), mapillaryNear(bboxAround(a, b))]);
+  const photos = results.flatMap((x) => (x.status === 'fulfilled' ? x.value : []));
+  const errors = results.filter((x) => x.status === 'rejected').map((x) => x.reason.message);
+  res.json({ ok: true, photos, mapillary_enabled: !!process.env.MAPILLARY_TOKEN, errors });
+});
+
+// Image proxy so the browser can preview open photos from a fixed allow-list of hosts.
+const PROXY_HOSTS = /(^|\.)(wikimedia\.org|wikipedia\.org|mapillary\.com|mapbox\.com|fbcdn\.net)$/;
+app.get('/api/img', async (req, res) => {
+  let u;
+  try { u = new URL(String(req.query.u || '')); } catch { return fail(res, 400, 'bad url'); }
+  if (u.protocol !== 'https:' || !PROXY_HOSTS.test(u.hostname)) return fail(res, 400, 'host not allowed');
+  try {
+    const r = await fetch(u, { headers: { 'User-Agent': COMMONS_UA } });
+    if (!r.ok) return fail(res, 502, `upstream ${r.status}`);
+    res.set('Content-Type', r.headers.get('content-type') || 'image/jpeg');
+    res.set('Cache-Control', 'public, max-age=86400');
+    res.send(Buffer.from(await r.arrayBuffer()));
+  } catch (err) { fail(res, 502, err.message); }
+});
+
+async function downloadImage(url) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 20000);
+  try {
+    const r = await fetch(url, { headers: { 'User-Agent': COMMONS_UA }, signal: ctrl.signal });
+    if (!r.ok) throw new Error(`${r.status}`);
+    return Buffer.from(await r.arrayBuffer());
+  } finally { clearTimeout(timer); }
+}
+
+// POST /api/segments/from-open-photos {start,end,name,photos:[{url,credit,license,page,source}]}?stream=1
+// Downloads the chosen open photos, grades them exactly like uploads, stores credits.
+app.post('/api/segments/from-open-photos', async (req, res) => {
+  const body = req.body || {};
+  const start = parsePoint(body.start), end = parsePoint(body.end);
+  const name = String(body.name || '').trim().slice(0, 120) || 'Footpath from open photos';
+  const chosen = (Array.isArray(body.photos) ? body.photos : []).slice(0, 8);
+  if (!start || !end) return fail(res, 400, 'start and end must be {lat,lng}');
+  if (!chosen.length) return fail(res, 400, 'choose at least one photo');
+  for (const c of chosen) { try { const u = new URL(c.url); if (u.protocol !== 'https:' || !PROXY_HOSTS.test(u.hostname)) return fail(res, 400, 'photo host not allowed'); } catch { return fail(res, 400, 'bad photo url'); } }
+  const stream = req.query.stream === '1';
+  if (stream) {
+    res.writeHead(200, { 'Content-Type': 'application/x-ndjson; charset=utf-8', 'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no' });
+    res.write(JSON.stringify({ type: 'start', photos: chosen.length, thumbs: chosen.map((c) => `/api/img?u=${encodeURIComponent(c.url)}`), model: vision.MODEL, mock: vision.MOCK }) + '\n');
+  }
+  try {
+    const buffers = await Promise.all(chosen.map((c) => downloadImage(c.url)));
+    const credits = chosen.map((c) => ({ credit: String(c.credit || '').slice(0, 120), license: String(c.license || '').slice(0, 40), source_url: String(c.page || c.url).slice(0, 300), source: /mapillary/.test(c.source) ? 'mapillary' : 'commons' }));
+    const source = credits.every((c) => c.source === 'mapillary') ? 'mapillary' : 'commons';
+    const segment = await analyseAndSave({ name, start, end, source }, buffers, stream ? (p) => res.write(JSON.stringify({ type: 'photo', photo: p }) + '\n') : null, credits);
+    console.log(`[open-photos] #${segment.id} "${segment.name}" score ${segment.score} from ${chosen.length} ${source} photo(s)`);
+    if (stream) { res.write(JSON.stringify({ type: 'segment', segment }) + '\n'); return res.end(); }
+    res.status(201).json(segment);
+  } catch (err) {
+    console.error('[open-photos] failed', err.message);
+    if (stream) { res.write(JSON.stringify({ type: 'error', error: err.message }) + '\n'); return res.end(); }
+    fail(res, 502, `open photo grading failed: ${err.message}`);
   }
 });
 

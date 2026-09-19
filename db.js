@@ -78,6 +78,12 @@ addCol('osm_id', 'INTEGER');
 addCol('geometry', 'TEXT');
 addCol('tags', 'TEXT');
 db.exec(`CREATE INDEX IF NOT EXISTS idx_segments_osm ON segments(osm_id)`);
+const pcols = new Set(db.prepare(`PRAGMA table_info(photos)`).all().map((c) => c.name));
+const addPhotoCol = (name, type) => { if (!pcols.has(name)) db.exec(`ALTER TABLE photos ADD COLUMN ${name} ${type}`); };
+addPhotoCol('credit', 'TEXT');
+addPhotoCol('license', 'TEXT');
+addPhotoCol('source_url', 'TEXT');
+addPhotoCol('source', 'TEXT');
 
 const q = {
   insertSegment: db.prepare(`INSERT INTO segments
@@ -88,8 +94,8 @@ const q = {
      @walk_reason, @wheelchair_reason, @senior_reason, @clear_width_m, @surface_type, @total_cost_inr, @created_at,
      @source, @osm_id, @geometry, @tags)`),
   osmIds: db.prepare(`SELECT osm_id FROM segments WHERE osm_id IS NOT NULL`),
-  insertPhoto: db.prepare(`INSERT INTO photos (segment_id, filename, hash, width_m, observations, status, created_at)
-    VALUES (@segment_id, @filename, @hash, @width_m, @observations, @status, @created_at)`),
+  insertPhoto: db.prepare(`INSERT INTO photos (segment_id, filename, hash, width_m, observations, status, created_at, credit, license, source_url, source)
+    VALUES (@segment_id, @filename, @hash, @width_m, @observations, @status, @created_at, @credit, @license, @source_url, @source)`),
   insertHazard: db.prepare(`INSERT INTO hazards (segment_id, photo_id, type_id, severity, note, bbox, cost_inr, authority)
     VALUES (@segment_id, @photo_id, @type_id, @severity, @note, @bbox, @cost_inr, @authority)`),
   allSegments: db.prepare(`SELECT s.*, (SELECT COUNT(*) FROM hazards h WHERE h.segment_id = s.id) AS hazard_count,
@@ -145,6 +151,10 @@ const saveSegment = db.transaction((graded, photos) => {
       observations: p.observations || '',
       status: p.status || 'ok',
       created_at: now(),
+      credit: p.credit || null,
+      license: p.license || null,
+      source_url: p.source_url || null,
+      source: p.source || null,
     });
     const photoId = Number(pi.lastInsertRowid);
     for (const h of p.hazards || []) {
@@ -198,6 +208,10 @@ function getSegment(id) {
     width_m: p.width_m,
     observations: p.observations,
     status: p.status,
+    credit: p.credit,
+    license: p.license,
+    source_url: p.source_url,
+    source: p.source,
   }));
   const hazards = q.hazardsFor.all(id).map((h) => ({
     id: h.id,
