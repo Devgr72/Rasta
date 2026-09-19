@@ -14,7 +14,7 @@ Built for a 2-hour hackathon. Node + Express + SQLite + vanilla JS + Leaflet. No
 
 ```bash
 npm install
-cp .env.example .env        # add ANTHROPIC_API_KEY
+cp .env.example .env        # add ANTHROPIC_API_KEY (and ANTHROPIC_WORKSPACE_ID for org-level keys)
 npm start                   # http://localhost:3000
 ```
 

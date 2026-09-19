@@ -15,7 +15,11 @@ const MOCK = process.env.RASTA_MOCK_VISION === '1' || !process.env.ANTHROPIC_API
 
 let client = null;
 function getClient() {
-  if (!client) client = new Anthropic({ timeout: 90_000, maxRetries: 1 });
+  if (!client) {
+    // Org-level keys must name a workspace; workspace-scoped keys can leave this unset.
+    const defaultHeaders = process.env.ANTHROPIC_WORKSPACE_ID ? { 'anthropic-workspace-id': process.env.ANTHROPIC_WORKSPACE_ID } : {};
+    client = new Anthropic({ timeout: 90_000, maxRetries: 1, defaultHeaders });
+  }
   return client;
 }
 
