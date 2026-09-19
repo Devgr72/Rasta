@@ -8,6 +8,7 @@ const SHELL_URLS = [
   '/', '/index.html', '/styles.css', '/app.js', '/map.js', '/i18n.js', '/report.html', '/report.js',
   '/manifest.webmanifest', '/icons/icon.svg', '/icons/icon-maskable.svg',
   '/vendor/leaflet/leaflet.js', '/vendor/leaflet/leaflet.css', '/vendor/exifr/lite.umd.js',
+  '/vendor/maplibre/maplibre-gl.js', '/vendor/maplibre/maplibre-gl.css', '/vendor/maplibre-leaflet/leaflet-maplibre-gl.js', '/vendor/googlemutant/Leaflet.GoogleMutant.js',
 ];
 const DATA_URLS = /^\/api\/(standards|config|segments|stats|health)(\?|$)/; // GET only
 

@@ -14,23 +14,121 @@
   const map = L.map('map', { zoomControl: false, attributionControl: true, preferCanvas: false, tap: true })
     .setView(DELHI, 13);
 
-  // Raster tiles. The server tells us which host to use (/api/config → RASTA_TILE_URL) because the
-  // public openstreetmap.org tiles are for development only. A CSS filter on the tile pane pulls
-  // any light basemap into the slate register (see .leaflet-tile-pane).
-  const DEFAULT_TILES = { url: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png', attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors' };
-  let tileLayer = null;
-  let tileErrors = 0;
-  function setTiles({ url, attribution, maxZoom = 19 }) {
-    if (tileLayer) { if (tileLayer._url === url) return; map.removeLayer(tileLayer); }
-    tileLayer = L.tileLayer(url, { maxZoom, attribution });
-    tileLayer.on('tileerror', () => {
-      tileErrors++;
-      if (tileErrors === 8) window.dispatchEvent(new CustomEvent('rasta:notice', { detail: { text: 'Map tiles are not loading. Check the connection; footpaths still work.', kind: 'error' } }));
+  // ---------- basemaps ----------
+  // Vector tiles from OpenFreeMap (free, no key) rendered by MapLibre inside a
+  // Leaflet pane. If WebGL or the style fails, we drop to OSM raster tiles.
+  const OSM_ATTR = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors';
+  const STYLES = {
+    dark: { url: 'https://tiles.openfreemap.org/styles/dark', attribution: `${OSM_ATTR} &copy; <a href="https://openfreemap.org">OpenFreeMap</a>`, casing: '#0B1120', light: false },
+    light: { url: 'https://tiles.openfreemap.org/styles/positron', attribution: `${OSM_ATTR} &copy; <a href="https://openfreemap.org">OpenFreeMap</a>`, casing: '#FFFFFF', light: true },
+    streets: { raster: true, casing: '#FFFFFF', light: true },
+    google: { google: true, casing: '#0B1120', light: false },
+  };
+  let googleKey = null;
+  // Slate night styling for Google's roadmap so it sits in the same register.
+  const GOOGLE_STYLE = [
+    { elementType: 'geometry', stylers: [{ color: '#111a2e' }] },
+    { elementType: 'labels.text.fill', stylers: [{ color: '#8a9bb5' }] },
+    { elementType: 'labels.text.stroke', stylers: [{ color: '#0f172a' }] },
+    { featureType: 'poi', stylers: [{ visibility: 'off' }] },
+    { featureType: 'transit', elementType: 'labels.icon', stylers: [{ visibility: 'off' }] },
+    { featureType: 'road', elementType: 'geometry', stylers: [{ color: '#22304a' }] },
+    { featureType: 'road', elementType: 'geometry.stroke', stylers: [{ color: '#0f172a' }] },
+    { featureType: 'road.highway', elementType: 'geometry', stylers: [{ color: '#33445f' }] },
+    { featureType: 'water', elementType: 'geometry', stylers: [{ color: '#0b1324' }] },
+    { featureType: 'landscape.natural', elementType: 'geometry', stylers: [{ color: '#121d31' }] },
+    { featureType: 'poi.park', elementType: 'geometry', stylers: [{ color: '#132033' }] },
+  ];
+  let googleLoading = null;
+  function loadGoogle() {
+    if (window.google?.maps) return Promise.resolve();
+    if (googleLoading) return googleLoading;
+    googleLoading = new Promise((resolve, reject) => {
+      const el = document.createElement('script');
+      el.src = `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(googleKey)}&v=weekly&loading=async&callback=__rastaGoogleReady`;
+      window.__rastaGoogleReady = () => resolve();
+      el.onerror = () => reject(new Error('Google Maps script failed to load'));
+      document.head.appendChild(el);
+      setTimeout(() => reject(new Error('Google Maps timed out')), 10000);
     });
-    tileLayer.addTo(map);
+    return googleLoading;
   }
-  setTiles(DEFAULT_TILES);
-  fetch('/api/config').then((r) => r.json()).then((c) => { if (c && c.tile_url) setTiles({ url: c.tile_url, attribution: c.tile_attribution || DEFAULT_TILES.attribution }); }).catch(() => {});
+  function enableGoogle(key) {
+    googleKey = key;
+    const btn = document.querySelector('[data-basemap="google"]');
+    if (btn) btn.hidden = !key;
+  }
+  let baseLayer = null;
+  let basemap = null;
+  let onBasemapChange = null;
+
+  // Raster tiles come from the host the server configures (/api/config → RASTA_TILE_URL), because
+  // openstreetmap.org's public tiles are for development only. detectRetina asks for one zoom level
+  // deeper on HiDPI screens so raster tiles are crisp instead of upscaled.
+  const RASTER = { url: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png', attribution: OSM_ATTR };
+  function rasterLayer(mono) {
+    return L.tileLayer(RASTER.url, { maxZoom: 19, maxNativeZoom: 19, detectRetina: true, attribution: RASTER.attribution, className: mono ? 'tiles-mono' : '' });
+  }
+  function setTiles({ url, attribution }) {
+    if (!url || (url === RASTER.url && (!attribution || attribution === RASTER.attribution))) return;
+    RASTER.url = url; RASTER.attribution = attribution || OSM_ATTR;
+    if (baseLayer && baseLayer instanceof L.TileLayer) setBasemap(basemap); // re-add with the new host
+  }
+  fetch('/api/config').then((r) => r.json()).then((c) => { if (c && c.tile_url) setTiles({ url: c.tile_url, attribution: c.tile_attribution }); }).catch(() => {});
+
+  function notice(text, kind) { window.dispatchEvent(new CustomEvent('rasta:notice', { detail: { text, kind } })); }
+  let noticed = false;
+  function noticeOnce(text, kind) { if (!noticed) { noticed = true; notice(text, kind); } }
+  let webgl = null;
+  function hasWebGL() {
+    if (webgl != null) return webgl;
+    try { const c = document.createElement('canvas'); webgl = !!(c.getContext('webgl2') || c.getContext('webgl')); } catch { webgl = false; }
+    return webgl;
+  }
+
+  function setBasemap(name) {
+    if (!STYLES[name]) name = 'dark';
+    const spec = STYLES[name];
+    if (baseLayer) { map.removeLayer(baseLayer); baseLayer = null; }
+    basemap = name;
+    try { localStorage.setItem('rasta.basemap', name); } catch {}
+    document.body.classList.toggle('map-light', !!spec.light);
+    document.body.dataset.basemap = name;
+
+    if (spec.google) {
+      if (!googleKey || !L.gridLayer?.googleMutant) { setBasemap('dark'); return; }
+      const g = L.gridLayer.googleMutant({ type: 'roadmap', styles: GOOGLE_STYLE, maxZoom: 21 });
+      baseLayer = g.addTo(map);
+      loadGoogle().catch((err) => { if (baseLayer === g) { notice(`${err.message}; showing the dark map instead`, 'error'); setBasemap('dark'); } });
+    } else if (spec.raster || !window.maplibregl || !L.maplibreGL || !hasWebGL()) {
+      baseLayer = rasterLayer(!spec.light).addTo(map);
+      if (!spec.raster) noticeOnce('Vector map unavailable on this device, using OpenStreetMap tiles', 'error');
+    } else {
+      const gl = L.maplibreGL({ style: spec.url, attribution: spec.attribution, interactive: false });
+      baseLayer = gl.addTo(map);
+      let ready = false;
+      const fallback = (why) => {
+        if (ready || baseLayer !== gl) return;
+        ready = true;
+        map.removeLayer(gl);
+        baseLayer = rasterLayer(!spec.light).addTo(map);
+        noticeOnce(`Vector map failed (${why}), using OpenStreetMap tiles`, 'error');
+      };
+      try {
+        const m = gl.getMaplibreMap();
+        m.once('load', () => { ready = true; });
+        m.on('error', (e) => { if (!ready && e?.error && /style|Failed to fetch|NetworkError|404|5\d\d/i.test(String(e.error.message || e.error))) fallback('style did not load'); });
+        setTimeout(() => { if (!ready) fallback('timed out'); }, 8000);
+      } catch (err) { fallback(err.message); }
+    }
+    restyleCasing();
+    for (const b of document.querySelectorAll('[data-basemap]')) { const on = b.dataset.basemap === name; b.classList.toggle('is-active', on); b.setAttribute('aria-checked', on); }
+    onBasemapChange && onBasemapChange(name, spec);
+  }
+  const casingColor = () => (STYLES[basemap] || STYLES.dark).casing;
+  function restyleCasing() {
+    casing.eachLayer((l) => l.setStyle({ color: casingColor() }));
+  }
 
   // ---------- segments ----------
   const casing = L.layerGroup().addTo(map);
@@ -53,14 +151,16 @@
     for (const f of features) {
       const latlngs = f.geometry.coordinates.map(([lng, lat]) => [lat, lng]);
       const p = f.properties;
-      L.polyline(latlngs, { color: '#0F172A', weight: 12, opacity: .9, className: 'seg-casing', interactive: false }).addTo(casing);
-      const line = L.polyline(latlngs, { color: lensColor(p), weight: 7, opacity: 1, className: 'seg-line', lineCap: 'round' })
-        .bindTooltip(`<b>${p.score}</b> ${escapeHtml(p.name)}`, { className: 'seg-tip', direction: 'top', sticky: true, opacity: 1 })
-        .on('mouseover', () => line.setStyle({ weight: 10 }))
-        .on('mouseout', () => { if (selectedId !== p.id) line.setStyle({ weight: 7 }); })
+      const osm = p.source === 'osm'; // tag-derived: thinner, so photographed walks stand out
+      const w = osm ? 4 : 7;
+      L.polyline(latlngs, { color: casingColor(), weight: osm ? 8 : 13, opacity: .95, className: 'seg-casing', interactive: false }).addTo(casing);
+      const line = L.polyline(latlngs, { color: lensColor(p), weight: w, opacity: osm ? .9 : 1, className: `seg-line${osm ? ' seg-osm' : ''}`, lineCap: 'round', lineJoin: 'round' })
+        .bindTooltip(`<b>${p.score}</b> ${escapeHtml(p.name)}${osm ? ' <small>· OSM tags</small>' : ''}`, { className: 'seg-tip', direction: 'top', sticky: true, opacity: 1 })
+        .on('mouseover', () => line.setStyle({ weight: w + 3 }))
+        .on('mouseout', () => { if (selectedId !== p.id) line.setStyle({ weight: w }); })
         .on('click', (e) => { L.DomEvent.stopPropagation(e); select(p.id, true); })
         .addTo(lines);
-      byId.set(p.id, { line, props: p, latlngs });
+      byId.set(p.id, { line, props: p, latlngs, w });
     }
     if (selectedId != null && !byId.has(selectedId)) selectedId = null;
   }
@@ -72,8 +172,8 @@
 
   function select(id, fromMap) {
     selectedId = id;
-    for (const [sid, { line }] of byId) {
-      line.setStyle({ weight: sid === id ? 10 : 7 });
+    for (const [sid, { line, w }] of byId) {
+      line.setStyle({ weight: sid === id ? w + 3 : w });
       if (id != null) line.getElement()?.classList.toggle('is-dim', sid !== id);
       else line.getElement()?.classList.remove('is-dim');
     }
@@ -91,6 +191,11 @@
     const all = [...byId.values()].flatMap((s) => s.latlngs);
     if (all.length) map.fitBounds(L.latLngBounds(all).pad(0.15), { maxZoom: 15 });
   }
+
+  let savedBasemap = 'dark';
+  try { savedBasemap = localStorage.getItem('rasta.basemap') || 'dark'; } catch {}
+  setBasemap(savedBasemap);
+  document.querySelectorAll('[data-basemap]').forEach((b) => b.addEventListener('click', () => setBasemap(b.dataset.basemap)));
 
   // ---------- point picking (Contribute + Route) ----------
   const pickLayer = L.layerGroup().addTo(map);
@@ -145,7 +250,7 @@
       latlngs.forEach((ll) => bounds.extend(ll));
       const covered = r.coverage >= 40 && r.score != null;
       const color = covered ? scoreColor(r.score) : COLORS.nodata;
-      L.polyline(latlngs, { color: '#0F172A', weight: 11, opacity: .8, interactive: false }).addTo(routeLayer);
+      L.polyline(latlngs, { color: casingColor(), weight: 11, opacity: .85, interactive: false }).addTo(routeLayer);
       const line = L.polyline(latlngs, {
         color, weight: i === recommended ? 7 : 5, opacity: 1, className: 'route-line',
         dashArray: covered ? null : '2 10',
@@ -193,6 +298,9 @@
     startPicking, stopPicking, clearPicks, setPicks,
     drawRoutes, clearRoutes, highlightRoute,
     locate, invalidate: () => map.invalidateSize(),
+    setBasemap, getBasemap: () => basemap, setOnBasemapChange: (fn) => { onBasemapChange = fn; }, enableGoogle,
+    getBounds: () => { const b = map.getBounds(); return { south: b.getSouth(), west: b.getWest(), north: b.getNorth(), east: b.getEast() }; },
+    getZoom: () => map.getZoom(),
     getFeatures: () => features,
   };
 })();

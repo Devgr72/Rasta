@@ -11,6 +11,7 @@
 <link href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,300..900&family=Noto+Sans+Devanagari:wght@400;600&display=swap" rel="stylesheet">
 <link rel="manifest" href="/manifest.webmanifest">
 <link rel="stylesheet" href="/vendor/leaflet/leaflet.css">
+<link rel="stylesheet" href="/vendor/maplibre/maplibre-gl.css">
 <link rel="stylesheet" href="/styles.css">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%230F172A'/%3E%3Cpath d='M7 24 L14 8 L18 18 L25 8' fill='none' stroke='%23F59E0B' stroke-width='3.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
 </head>
@@ -30,6 +31,7 @@
     <div><dt data-i18n="ledger.hazards">hazards found</dt><dd data-stat="hazards">0</dd></div>
     <div><dt data-i18n="ledger.km">km covered</dt><dd data-stat="km_covered">0</dd></div>
     <div><dt data-i18n="ledger.cost">to fix everything</dt><dd data-stat="total_cost_inr">₹0</dd></div>
+    <div data-stat-wrap="open_data_segments" hidden><dt data-i18n="ledger.opendata">from open data</dt><dd data-stat="open_data_segments">0</dd></div>
   </dl>
   <div class="ledger-status" id="ledger-status" hidden></div>
   <button type="button" class="lang-toggle" id="btn-lang" data-i18n="lang.toggle" data-i18n-attr="aria-label:lang.aria" aria-label="Switch language to Hindi" lang="hi">हिन्दी</button>
@@ -60,6 +62,10 @@
     <button class="lens-opt" role="radio" aria-checked="false" data-lens="senior" data-i18n="lens.senior" tabindex="-1">Senior</button>
   </div>
   <p class="lens-note" id="lens-note" aria-live="polite"></p>
+  <button type="button" class="ghost import-btn" id="btn-import">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12M7 10l5 5 5-5M4 19h16"/></svg>
+    <span data-i18n="map.import">Add OpenStreetMap data for this area</span>
+  </button>
 </div>
 
 <div class="map-buttons">
@@ -71,10 +77,18 @@
   </button>
 </div>
 
+<div class="basemap" role="radiogroup" aria-label="Map style" id="basemap">
+  <button class="basemap-opt" role="radio" aria-checked="false" data-basemap="dark" title="Dark map">Dark</button>
+  <button class="basemap-opt" role="radio" aria-checked="false" data-basemap="light" title="Light map">Light</button>
+  <button class="basemap-opt" role="radio" aria-checked="false" data-basemap="streets" title="Standard OpenStreetMap">Streets</button>
+  <button class="basemap-opt" role="radio" aria-checked="false" data-basemap="google" title="Google Maps" hidden>Google</button>
+</div>
+
 <div class="legend" id="legend" aria-hidden="true">
   <span><i style="--c:#22C55E"></i><span data-i18n="legend.high">above 70</span></span>
   <span><i style="--c:#F59E0B"></i><span data-i18n="legend.mid">40 to 70</span></span>
   <span><i style="--c:#DC2626"></i><span data-i18n="legend.low">under 40</span></span>
+  <span><i class="thin" style="--c:#9AA8C2"></i><span data-i18n="legend.thin">thin: from OpenStreetMap tags</span></span>
 </div>
 
 <!-- the panel: right sheet on desktop, bottom sheet on phones -->
@@ -112,6 +126,7 @@
               <button type="button" class="ghost" id="btn-clear-points" data-i18n="c.clear">Clear</button>
               <button type="button" class="ghost gps" id="btn-place-gps" hidden title="Use the location stored in the first and last photo" data-i18n-attr="title:c.gps.title">Place from photo GPS</button>
             </div>
+            <div class="nearby" id="nearby" hidden></div>
           </div>
 
           <div class="step" data-step="name">
@@ -140,6 +155,13 @@
               <span><strong data-i18n="c.drop">Take or choose photos</strong><small id="drop-small" data-i18n="c.drop.small">up to 12 · JPG, PNG, HEIC converts on iPhone</small></span>
             </label>
             <div id="strip-home"><div class="strip" id="photo-strip"></div></div>
+            <div class="open-photos" id="open-photos">
+              <button type="button" class="ghost" id="btn-open-photos" disabled>
+                <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c3 3 3 15 0 18M12 3c-3 3-3 15 0 18"/></svg>
+                <span>Find open photos of this stretch</span>
+              </button>
+              <div class="open-list" id="open-list" hidden></div>
+            </div>
           </div>
         </div>
 
@@ -231,17 +253,23 @@
       </div>
       <button class="close" data-el="close" aria-label="Close" data-i18n-attr="aria-label:seg.close">×</button>
     </header>
+    <p class="seg-source" data-el="source" hidden></p>
     <ul class="verdicts" data-el="verdicts"></ul>
     <div class="photos" data-el="photos"></div>
     <div class="hazards" data-el="hazards"></div>
     <div class="cost" data-el="cost"></div>
+    <div class="also" data-el="also"></div>
     <div class="seg-actions">
-      <a class="ghost" data-el="report" target="_blank" rel="noopener" data-i18n="seg.report">Open engineer's report</a>
+      <button type="button" class="primary" data-el="walk" data-i18n="seg.walk">Walk this stretch with photos</button>
+      <a class="ghost" data-el="report" target="_blank" rel="noopener" data-i18n="seg.report">Engineer's report</a>
     </div>
   </article>
 </template>
 
 <script src="/vendor/leaflet/leaflet.js"></script>
+<script src="/vendor/maplibre/maplibre-gl.js"></script>
+<script src="/vendor/maplibre-leaflet/leaflet-maplibre-gl.js"></script>
+<script src="/vendor/googlemutant/Leaflet.GoogleMutant.js"></script>
 <script src="/vendor/exifr/lite.umd.js"></script>
 <script src="/i18n.js"></script>
 <script src="/map.js"></script>

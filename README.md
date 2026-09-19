@@ -26,7 +26,7 @@ framework, no ORM.
 ```bash
 git clone https://github.com/Devgr72/Rasta.git && cd Rasta
 npm install
-cp .env.example .env        # paste ANTHROPIC_API_KEY, or leave it empty for mock vision
+cp .env.example .env        # paste ANTHROPIC_API_KEY (plus ANTHROPIC_WORKSPACE_ID for org-level keys), or leave it empty for mock vision
 npm start                   # http://localhost:3000
 ```
 
@@ -90,6 +90,10 @@ it never reaches the browser.
 | `LOG_FORMAT` | `lib/log.js` | pretty on a TTY, else json | `json` for one structured line per request; `pretty` for humans |
 | `SENTRY_DSN` | `lib/sentry.js` | unset | Enables error reporting (unhandled errors, 500s) to Sentry via the envelope API — no SDK |
 | `SENTRY_RELEASE` | `lib/sentry.js` | `rasta@<version>` | Release tag on Sentry events |
+| `GOOGLE_MAPS_KEY` | `server.js` | unset | Adds a Google basemap option (key is sent to the browser on purpose; restrict it by referrer) |
+| `OVERPASS_URL` | `server.js` | overpass-api.de | Alternative Overpass mirror for the OpenStreetMap import |
+| `MAPILLARY_TOKEN` | `server.js` | unset | Adds Mapillary street-level imagery to "open photos nearby" |
+| `ANTHROPIC_WORKSPACE_ID` | `vision.js` | unset | Required header for org-level Anthropic keys |
 | `BASE` | `scripts/*.js` | `http://localhost:3000` | Target for the browser scripts |
 | `CHROME` | `scripts/*.js` | per-OS default | Chrome binary for the browser scripts |
 | `OUT` | `scripts/*.js` | OS temp dir | Screenshot output directory |
@@ -119,12 +123,17 @@ All responses are JSON. Fields are only ever added, never renamed or removed.
 | `GET` | `/api/health` | `{ok, model, mock, concurrency, daily_token_budget, budget_reached}` |
 | `GET` | `/api/stats` | `{segments, hazards, km_covered, avg_score, total_cost_inr, wheelchair_ok_count, senior_ok_count, vision:{today, total, budget, budget_reached, concurrency}}` — token usage per UTC day and overall |
 | `GET` | `/api/standards` | The knowledge file |
-| `GET` | `/api/config` | Non-secret frontend settings: `tile_url`, `tile_attribution`, `routing` (`public-demo` or `configured`), `max_photos`, `max_image_px`, `max_upload_mb`, `model`, `mock` |
+| `GET` | `/api/config` | Non-secret frontend settings: `tile_url`, `tile_attribution`, `routing` (`public-demo` or `configured`), `max_photos`, `max_image_px`, `max_upload_mb`, `model`, `mock`, `google_maps_key` (if set), `mapillary_enabled` |
 | `GET` | `/api/segments` | GeoJSON `FeatureCollection`; each feature's `properties` is a segment summary |
 | `GET` | `/api/segments/:id` | One segment with `geometry`, `photos[]` (each with `url, lat, lng, taken_at`), `hazards[]` and `verdicts` |
 | `POST` | `/api/segments` | Create a segment. Multipart `name, start, end, photos[]` (up to 12), or JSON `{name, start, end, photos:[dataURL]}`. Runs vision on every photo in parallel while the two points are snapped to the footway with OSRM (`match` → `route` → straight line), scores, persists, returns the graded segment with `201` plus `geometry` and `geometry_source` (`osrm-match`, `osrm-route` or `straight`). Optional `photo_meta` (JSON array of `{lat,lng,taken_at}` aligned with the photos). Add `?stream=1` for NDJSON: `{type:"start"}`, one `{type:"photo"}` per result as it lands, then `{type:"segment"}` |
 | `POST` | `/api/route` | `{from:{lat,lng}, to:{lat,lng}, persona}` → OSRM alternatives scored against walked segments, with `coverage`, `worst_hazard`, `persona_blockers`, `recommended_index` and `candidates` (segments loaded by the bbox pre-filter). Falls back to `data/demo-route.json` if OSRM fails or exceeds 3 s |
 | `DELETE` | `/api/segments/:id` | Takedown. Only exists when `RASTA_ADMIN_TOKEN` is set; needs `Authorization: Bearer <token>`. Cascades to photos and hazards and removes orphaned upload files |
+| `GET` | `/api/segments/near?lat&lng&r` | Readings within `r` metres of a point (default 80, max 500), nearest first, with `distance_m` |
+| `POST` | `/api/import/osm` | `{south,west,north,east}` → grades every OpenStreetMap way in the box whose tags say something about accessibility (source `osm`), deduplicated by way id. Rate limited like uploads |
+| `GET` | `/api/photos/open?lat&lng&lat2&lng2&r` | Openly licensed photos near a point or along a stretch (Wikimedia Commons; Mapillary when `MAPILLARY_TOKEN` is set), with author and licence |
+| `POST` | `/api/segments/from-open-photos` | `{start,end,name,photos:[{url,credit,license,page,source}]}` → downloads the chosen open photos and grades them exactly like uploads, storing the credits. `?stream=1` for NDJSON |
+| `GET` | `/api/img?u=` | Image proxy for the allow-listed open-photo hosts, so previews work under the CSP |
 
 ### Storage, cache and schema
 
@@ -287,6 +296,36 @@ Migrations re-run at boot against whatever version the restored file is at, so a
 upgraded automatically. Vision cache entries are in the same file (`vision_calls.result`), so a
 restore also restores the cache.
 
+## Open data
+
+The map is not only what people photograph. **Add OpenStreetMap data for this area** (bottom left of
+the Map tab) pulls every footway, sidewalk and road in view from OpenStreetMap via Overpass and grades
+the ones whose tags say something about accessibility: `wheelchair`, `smoothness`, `surface`, `kerb`,
+`tactile_paving`, `width`, `incline`, `lit`, `sidewalk=no`, and `highway=steps`. Tags are translated
+into the same hazard types a photo produces, so the scoring rules are identical. Tag-derived footpaths
+draw thinner, say "graded from OpenStreetMap tags" in the panel, link to the OSM way, and carry a
+"verify with photos" button that prefills the Walk tab.
+
+When someone marks a stretch that is already mapped, the Walk tab says so and lists the earlier
+readings. The segment panel shows "Also mapped here" for every other reading within 60 m.
+
+## Open photos
+
+Two ways real photographs reach the map without anyone walking:
+
+- **Find open photos of this stretch** on the Walk tab searches Wikimedia Commons for geotagged,
+  freely licensed photos taken along the marked stretch (and Mapillary street-level imagery when
+  `MAPILLARY_TOKEN` is set). Pick the ones that show the footpath and they are graded exactly like
+  uploads. Author, licence and a link back are stored with every photo and shown under it.
+- `POST /api/segments/from-open-photos` does the same from a script. Five Delhi stretches on the map
+  were seeded this way from Commons photos by Biswarup Ganguly, Harshanh and Sidheeq.
+
+## Map styles
+
+Dark and Light are vector tiles from OpenFreeMap (free, no key) rendered by MapLibre inside Leaflet.
+Streets is raster OpenStreetMap, loaded at retina resolution. If `GOOGLE_MAPS_KEY` is set in `.env`
+a Google option appears, styled to match; restrict that key by HTTP referrer in Google Cloud.
+
 ## Layout
 
 ```
@@ -294,7 +333,7 @@ server.js            Express app, all routes, seeding, OSRM with cached fallback
 db.js                SQLite schema + queries (better-sqlite3)
 vision.js            Anthropic call, knowledge injection, JSON repair, hash cache — the only file with the key
 scoring.js           Segment score, persona verdicts, cost, route scoring (pure functions)
-knowledge/           standards.json — 21 hazard types, dimensional standards, authorities
+knowledge/           standards.json — 23 hazard types, dimensional standards, authorities
 public/              index.html, app.js, map.js, styles.css, report.html, demo/
 data/                seed.json, demo-route.json (rasta.db and vision-cache/ are gitignored)
 evals/               cases.json ground truth, run.js, photos/ (gitignored contents)
