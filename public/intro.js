@@ -1,4 +1,5 @@
-/* intro.js — plays the opening sequence once per session. ?intro=1 replays, ?intro=0 skips,
+/* intro.js — plays the opening sequence on every load of the page. ?intro=0 skips, ?intro=1 forces it
+   even under automation or reduced motion,
    ?intro=record freezes timing so scripts/render-intro.js can render it to video frame by frame. */
 (function () {
   const el = document.getElementById('intro');
@@ -6,12 +7,10 @@
   const q = new URLSearchParams(location.search);
   const mode = q.get('intro');
   const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
-  let seen = false;
-  try { seen = sessionStorage.getItem('rasta.intro') === '1'; } catch {}
   const record = mode === 'record';
   // Automation (tests, screenshot scripts) skips the intro unless it asks for it.
   const automated = !!navigator.webdriver && mode !== '1' && !record;
-  if (mode === '0' || automated || (seen && mode !== '1' && !record) || (reduced && !record)) { el.remove(); return; }
+  if (mode === '0' || automated || (reduced && mode !== '1' && !record)) { el.remove(); return; }
 
   // Deterministic scatter in record mode so every frame render matches; random otherwise.
   let seed = 7;
@@ -36,7 +35,6 @@
     finished = true;
     el.remove();
     document.body.classList.remove('intro-playing');
-    try { sessionStorage.setItem('rasta.intro', '1'); } catch {}
     window.dispatchEvent(new CustomEvent('rasta:intro-done'));
   }
   if (!record) {
