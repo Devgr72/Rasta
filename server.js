@@ -234,10 +234,12 @@ app.use((err, _req, res, _next) => {
   fail(res, 500, 'server error');
 });
 
-if (require.main === module) {
+function start(port = PORT) {
   seedIfEmpty();
-  app.listen(PORT, () => {
-    console.log(`Rasta on http://localhost:${PORT}  model=${vision.MODEL}${vision.MOCK ? ' (MOCK vision — add ANTHROPIC_API_KEY to .env)' : ''}`);
+  return app.listen(port, () => {
+    console.log(`Rasta on http://localhost:${port}  model=${vision.MODEL}${vision.MOCK ? ' (MOCK vision — add ANTHROPIC_API_KEY to .env)' : ''}`);
   });
 }
-module.exports = { app, seedIfEmpty };
+
+if (require.main === module) start();
+module.exports = { app, seedIfEmpty, start };

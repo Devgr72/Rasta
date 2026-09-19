@@ -8,3 +8,13 @@ data/vision-cache/
 uploads/
 .DS_Store
 evals/last-run.json
+
+# eval / demo photos live locally only
+evals/photos/*
+!evals/photos/.gitkeep
+public/demo/*
+!public/demo/.gitkeep
+!public/demo/manifest.json
+
+# tooling
+.code-review-graph/

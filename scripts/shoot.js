@@ -1,10 +1,16 @@
-// node scripts-shoot.js — drives the UI in headless Chrome and screenshots every screen.
+// node scripts/shoot.js — drives the UI in headless Chrome and screenshots every screen.
+// Env: BASE (server), OUT (screenshot dir), CHROME (browser binary if not in the default place).
 const puppeteer = require('puppeteer-core');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const BASE = process.env.BASE || 'http://localhost:3000';
-const OUT = process.env.OUT || '/tmp/shots';
-const CHROME = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
+const OUT = process.env.OUT || path.join(os.tmpdir(), 'shots');
+const CHROME = process.env.CHROME || {
+  darwin: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+  win32: 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
+  linux: '/usr/bin/google-chrome',
+}[process.platform];
 fs.mkdirSync(OUT, { recursive: true });
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
