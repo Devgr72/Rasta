@@ -1,0 +1,9 @@
+node_modules/
+.env
+data/rasta.db
+data/rasta.db-journal
+data/rasta.db-wal
+data/rasta.db-shm
+data/vision-cache/
+uploads/
+.DS_Store
