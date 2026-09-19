@@ -344,6 +344,9 @@ function getSegment(id) {
     license: p.license,
     source_url: p.source_url,
     source: p.source,
+    photo_lat: p.photo_lat ?? null,
+    photo_lng: p.photo_lng ?? null,
+    taken_at: p.taken_at ?? null,
   }));
   const hazards = q.hazardsFor.all(id).map((h) => ({
     id: h.id,
@@ -367,14 +370,28 @@ function segmentsInBbox(bbox) {
   return q.segmentsInBbox.all(bbox).map(rowToSegment);
 }
 
+// Up to three worst hazard types per segment, for tooltips: "what is damaged here".
+const topHazardsStmt = db.prepare(`SELECT segment_id, type_id, MAX(severity) AS severity, COUNT(*) AS n
+  FROM hazards GROUP BY segment_id, type_id ORDER BY segment_id, severity DESC, n DESC`);
+function topHazardsBySegment() {
+  const out = new Map();
+  for (const r of topHazardsStmt.all()) {
+    const list = out.get(r.segment_id) || [];
+    if (list.length < 3) list.push({ type_id: r.type_id, severity: r.severity, n: r.n });
+    out.set(r.segment_id, list);
+  }
+  return out;
+}
+
 function toGeoJSON() {
+  const top = topHazardsBySegment();
   return {
     type: 'FeatureCollection',
     features: q.allSegments.all().map((row) => ({
       type: 'Feature',
       id: row.id,
       geometry: parseGeometry(row),
-      properties: (() => { const p = rowToSegment(row); delete p.tags; return p; })(),
+      properties: (() => { const p = rowToSegment(row); delete p.tags; p.top_hazards = top.get(row.id) || []; return p; })(),
     })),
   };
 }

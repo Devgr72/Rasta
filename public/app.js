@@ -230,10 +230,20 @@
     }
   });
   window.addEventListener('rasta:mapclick', () => { if (state.tab === 'map') showEmpty(); });
+  window.addEventListener('rasta:hazard-pin', (e) => {
+    const row = $(`.hz[data-hazard-id="${e.detail.id}"]`); if (!row) return;
+    if (isPhone()) setSheet(true);
+    row.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    row.classList.add('is-flash'); setTimeout(() => row.classList.remove('is-flash'), 1400);
+  });
+  window.addEventListener('rasta:intro-done', () => setTimeout(M.invalidate, 50));
 
   function showEmpty() {
+    M.clearHazardPins();
     $('#segment-detail').innerHTML = `<div class="empty"><h2>${t('empty.title')}</h2><p>${t('empty.body')}</p><p class="hint">${t('empty.hint')}</p></div>`;
   }
+
+  const portalFor = (auth) => state.standards?.authority_portals?.[auth] || null;
 
   function complaintText(seg, h) {
     const t = state.types[h.type_id] || {};
@@ -262,16 +272,16 @@
       const pts = [seg.start, seg.end];
       setTab('contribute'); M.setPicks(pts); $('#seg-name').value = seg.name.replace(/ \((footway|footpath|road|steps)\)$/, '');
       $('[data-step="name"]').classList.add('is-done'); M.flyToSegment(seg.id);
-      toast('Points set from this stretch. Add photos to verify it.', 'ok');
+      toast(t('seg.walk.set'), 'ok');
     });
     if (seg.source === 'commons' || seg.source === 'mapillary') {
       const src = el('source'); src.hidden = false;
-      src.innerHTML = `Graded from openly licensed photos on ${seg.source === 'mapillary' ? 'Mapillary' : 'Wikimedia Commons'} taken at this spot. Walk it to add a current reading.`;
+      src.innerHTML = t('seg.source.open', { site: seg.source === 'mapillary' ? 'Mapillary' : 'Wikimedia Commons' });
     }
     if (seg.source === 'osm') {
       const src = el('source'); src.hidden = false;
-      src.innerHTML = `Graded from <a href="https://www.openstreetmap.org/way/${seg.osm_id}" target="_blank" rel="noopener">OpenStreetMap tags</a>, not yet photographed. Walk it to confirm what is on the ground.`;
-      el('walk').textContent = 'Verify this stretch with photos';
+      src.innerHTML = t('seg.source.osm', { url: `https://www.openstreetmap.org/way/${seg.osm_id}` });
+      el('walk').textContent = t('seg.verify');
     }
     // other readings of the same stretch
     (async () => {
@@ -281,7 +291,7 @@
         const others = r.segments.filter((s) => s.id !== seg.id);
         if (!others.length) return;
         const also = host.querySelector('[data-el="also"]'); if (!also) return;
-        also.innerHTML = `<h3>Also mapped here</h3><ul>${others.slice(0, 5).map((s) => `<li><button type="button" data-view="${s.id}"><span class="sc" style="background:${M.scoreColor(s.score)}">${s.score}</span><span>${esc(s.name)}<br><small>${s.source === 'osm' ? 'OpenStreetMap tags' : `walked ${new Date(s.created_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}`} · ${s.distance_m} m away</small></span></button></li>`).join('')}</ul>`;
+        also.innerHTML = `<h3>${t('seg.also')}</h3><ul>${others.slice(0, 5).map((s) => `<li><button type="button" data-view="${s.id}"><span class="sc" style="background:${M.scoreColor(s.score)}">${s.score}</span><span>${esc(s.name)}<br><small>${s.source === 'osm' ? t('seg.also.osm') : t('seg.also.walked', { date: new Date(s.created_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' }) })} · ${t('seg.also.away', { m: s.distance_m })}</small></span></button></li>`).join('')}</ul>`;
         $$('[data-view]', also).forEach((b) => b.addEventListener('click', () => { const id = Number(b.dataset.view); M.flyToSegment(id); M.select(id); }));
       } catch {}
     })();
@@ -314,9 +324,10 @@
       const group = perPhoto[h.photo_id] || [];
       const chip = group.length > 3 ? `<small class="hz-n">${group.indexOf(h) + 1}</small>` : '';
       row.innerHTML = `<span class="hz-sev ${h.severity >= 4 ? 'hi' : h.severity <= 2 ? 'lo' : ''}" aria-hidden="true">${h.severity}${chip}</span>
-        <div><b>${esc(typeLabel(h.type_id))}<span class="hi-label">${esc(typeLabelHi(h.type_id))}</span></b><p>${esc(h.note || '')}</p><div class="auth">${esc(h.authority || '')} · ${esc(state.types[h.type_id]?.standard_ref || '')}</div><button type="button" class="hz-copy">${t('hz.copy')}</button></div>
+        <div><b>${esc(typeLabel(h.type_id))}<span class="hi-label">${esc(typeLabelHi(h.type_id))}</span></b><p>${esc(h.note || '')}</p><div class="auth">${esc(h.authority || '')} · ${esc(state.types[h.type_id]?.standard_ref || '')}</div><div class="hz-actions"><button type="button" class="hz-copy">${t('hz.copy')}</button>${portalFor(h.authority) ? `<a class="hz-submit" href="${esc(portalFor(h.authority).url)}" target="_blank" rel="noopener" title="${esc(portalFor(h.authority).how || '')}">${t('hz.submit', { auth: h.authority })}</a>` : ''}<a class="hz-submit" href="${esc(portalFor('_any')?.url || 'https://pgms.delhi.gov.in/')}" target="_blank" rel="noopener">${t('hz.submit.any')}</a></div></div>
         <span class="hz-cost">${h.cost_inr ? fmtINR(h.cost_inr) : t('hz.enforce')}</span>`;
-      const hot = (on) => { row.classList.toggle('is-hot', on); const shot = shots.get(h.photo_id); shot?.querySelectorAll('.box').forEach((b) => { b.style.opacity = on ? (b.dataset.hazard == h.id ? 1 : .15) : ''; }); };
+      row.dataset.hazardId = h.id;
+      const hot = (on) => { row.classList.toggle('is-hot', on); M.hotPin(h.id, on); const shot = shots.get(h.photo_id); shot?.querySelectorAll('.box').forEach((b) => { b.style.opacity = on ? (b.dataset.hazard == h.id ? 1 : .15) : ''; }); };
       row.addEventListener('mouseenter', () => hot(true)); row.addEventListener('mouseleave', () => hot(false));
       row.addEventListener('focus', () => hot(true)); row.addEventListener('blur', () => hot(false));
       row.querySelector('.hz-copy').addEventListener('click', async (e) => {
@@ -333,7 +344,9 @@
     el('cost').innerHTML = `<div class="cost-total"><span>${t('cost.total')}</span><b>${fmtINR(seg.total_cost_inr)}</b></div>
       <div class="cost-rows">${Object.entries(byAuth).sort((a, b) => b[1] - a[1]).map(([a, c]) => `<span>${esc(a)}<br><small style="color:var(--ink-faint)">${esc(state.standards?.authorities?.[a] || '')}</small></span><span>${fmtINR(c)}</span>`).join('') || `<span>${t('cost.none')}</span><span></span>`}</div>`;
 
+    if (seg.hazards.length) hz.insertAdjacentHTML('afterbegin', `<p class="pins-note">${t('seg.pins')}</p>`);
     host.innerHTML = ''; host.appendChild(tpl);
+    M.showHazardPins(seg);
     // land boxes after paint
     requestAnimationFrame(() => {
       for (const [pid, shot] of shots) landBoxes(shot, seg.hazards.filter((h) => h.photo_id === pid), { stagger: 150 });

@@ -13,19 +13,32 @@
 <link rel="stylesheet" href="/vendor/leaflet/leaflet.css">
 <link rel="stylesheet" href="/vendor/maplibre/maplibre-gl.css">
 <link rel="stylesheet" href="/styles.css">
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%230F172A'/%3E%3Cpath d='M7 24 L14 8 L18 18 L25 8' fill='none' stroke='%23F59E0B' stroke-width='3.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='12' fill='%230F172A'/%3E%3Cg fill='none' stroke-width='5' stroke-linecap='round'%3E%3Cpath d='M14 56 L28 8M50 56 L36 8' stroke='%23F59E0B'/%3E%3Cpath d='M19 46 H45' stroke='%23DC2626'/%3E%3Cpath d='M23 32 H41' stroke='%23F59E0B'/%3E%3Cpath d='M26 18 H38' stroke='%2322C55E'/%3E%3C/g%3E%3C/svg%3E">
 </head>
 <body>
+<!-- intro: the mark assembles from scattered strokes, then a shutter rises to reveal the map -->
+<div class="intro" id="intro" aria-hidden="true">
+  <div class="intro-slats"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+  <div class="intro-stage">
+    <svg class="intro-logo" viewBox="0 0 640 200" aria-hidden="true">
+      <g class="mark" transform="translate(24 44) scale(1.75)"><path class="st edge" d="M14 56 L28 8"/><path class="st edge" d="M50 56 L36 8"/><path class="st tick t1" d="M19 46 H45"/><path class="st tick t2" d="M23 32 H41"/><path class="st tick t3" d="M26 18 H38"/></g>
+      <g class="word" transform="translate(160 50)"><g transform="translate(0 0)"><path class="st" d="M8 100 V0 H40 A26 26 0 0 1 40 52 H8"/><path class="st" d="M36 52 L66 100"/></g><g transform="translate(92 0)"><path class="st" d="M4 100 L36 0 L68 100"/><path class="st" d="M18 58 H54"/></g><g transform="translate(184 0)"><path class="st" d="M64 20 C64 4 10 0 8 26 C6 52 66 44 66 74 C66 100 8 100 6 82"/></g><g transform="translate(276 0)"><path class="st" d="M0 0 H70"/><path class="st" d="M35 0 V100"/></g><g transform="translate(368 0)"><path class="st" d="M4 100 L36 0 L68 100"/><path class="st" d="M18 58 H54"/></g></g>
+    </svg>
+    <p class="intro-hi" lang="hi">रास्ता</p>
+    <p class="intro-tag" data-i18n="intro.tagline">Walk a street. The city gets mapped.</p>
+  </div>
+  <button type="button" class="intro-skip" id="intro-skip" data-i18n="intro.skip">Skip intro</button>
+</div>
 <a class="skip" href="#panel" data-i18n="map.skip">Skip to panel</a>
 
 <div id="map" role="application" aria-label="Footpath map" data-i18n-attr="aria-label:map.aria"></div>
 
 <!-- top strip: the city's ledger -->
 <header class="ledger" id="ledger" aria-live="polite">
-  <div class="ledger-brand">
-    <svg viewBox="0 0 32 32" width="26" height="26" aria-hidden="true"><path d="M7 24 L14 8 L18 18 L25 8" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
-    <span>Rasta</span>
-  </div>
+  <a class="ledger-brand" href="/?intro=1" title="Replay intro">
+    <svg class="mark" viewBox="0 0 64 64" width="30" height="30" aria-hidden="true"><g fill="none" stroke-width="5" stroke-linecap="round"><path d="M14 56 L28 8M50 56 L36 8" stroke="#F59E0B"/><path d="M19 46 H45" stroke="#DC2626"/><path d="M23 32 H41" stroke="#F59E0B"/><path d="M26 18 H38" stroke="#22C55E"/></g></svg>
+    <span class="wordmark">Rasta<small lang="hi">रास्ता</small></span>
+  </a>
   <dl class="ledger-figures">
     <div><dt data-i18n="ledger.segments">footpaths walked</dt><dd data-stat="segments">0</dd></div>
     <div><dt data-i18n="ledger.hazards">hazards found</dt><dd data-stat="hazards">0</dd></div>
@@ -285,6 +298,7 @@
 <script src="/vendor/googlemutant/Leaflet.GoogleMutant.js"></script>
 <script src="/vendor/exifr/lite.umd.js"></script>
 <script src="/i18n.js"></script>
+<script src="/intro.js"></script>
 <script src="/map.js"></script>
 <script src="/app.js"></script>
 </body>

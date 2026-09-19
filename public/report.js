@@ -12,7 +12,7 @@
     for (const h of seg.hazards) byAuth[h.authority || 'Other'] = (byAuth[h.authority || 'Other'] || 0) + (h.cost_inr || 0);
     document.title = `${ref} — ${seg.name}`;
     page.innerHTML = `
-      <div class="ref"><div>Footpath condition report<br>Crowdsourced field observation · Rasta</div><div style="text-align:right"><b>${ref}</b>${new Date(seg.created_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' })}</div></div>
+      <div class="ref"><div>Path report · footpath condition<br>Crowdsourced field observation · Rasta</div><div style="text-align:right"><b>${ref}</b>${new Date(seg.created_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' })}</div></div>
       <h1>${esc(seg.name)}</h1>
       <p class="sub">From ${seg.start.lat.toFixed(5)}, ${seg.start.lng.toFixed(5)} to ${seg.end.lat.toFixed(5)}, ${seg.end.lng.toFixed(5)} · ${seg.length_m} m · surface: ${esc(seg.surface_type)}</p>
       <dl class="facts">
@@ -32,6 +32,8 @@
       <h2>Cost by responsible authority</h2>
       <table><tbody>${Object.entries(byAuth).map(([a, c]) => `<tr><td><b>${esc(a)}</b> — ${esc(std.authorities?.[a] || '')}</td><td class="n">${inr(c)}</td></tr>`).join('') || '<tr><td>None</td></tr>'}</tbody></table>
       ${seg.photos.some((p) => p.url) ? `<h2>Photographic evidence</h2><div class="photos">${seg.photos.filter((p) => p.url).map((p, i) => `<figure class="photo" style="margin:0"><div style="position:relative"><img src="${p.url}" alt="">${seg.hazards.filter((h) => h.photo_id === p.id && h.bbox).map((h) => `<div class="bx" style="left:${h.bbox.x * 100}%;top:${h.bbox.y * 100}%;width:${h.bbox.w * 100}%;height:${h.bbox.h * 100}%"><span>${esc(types[h.type_id]?.label_en || h.type_id)}</span></div>`).join('')}</div><figcaption>Photo ${i + 1}${p.observations ? ' — ' + esc(p.observations) : ''}</figcaption></figure>`).join('')}</div>` : ''}
+      <h2>Where to file this report</h2>
+      <table><tbody>${[...new Set(seg.hazards.map((h) => h.authority).filter(Boolean)), '_any'].map((a) => { const po = std.authority_portals?.[a]; if (!po) return ''; return `<tr><td><b>${a === '_any' ? 'Any department' : esc(a)}</b> — <a href="${esc(po.url)}" target="_blank" rel="noopener">${esc(po.label)}</a><br><span style="color:var(--faint)">${esc(po.how)}</span></td></tr>`; }).join('') || '<tr><td>No authority identified.</td></tr>'}</tbody></table>
       <p class="foot">Observations were recorded by a member of the public and graded automatically against the Harmonised Guidelines and Standards for Universal Accessibility in India (2021) and IRC:103-2012. Costs are indicative 2025 Delhi rates for scoping and are not an estimate for tender. Reference ${ref}.</p>`;
   } catch (err) { page.innerHTML = `<h1>Report unavailable</h1><p>${esc(err.message)}</p>`; }
 })();

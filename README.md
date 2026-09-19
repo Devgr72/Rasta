@@ -300,6 +300,20 @@ Migrations re-run at boot against whatever version the restored file is at, so a
 upgraded automatically. Vision cache entries are in the same file (`vision_calls.result`), so a
 restore also restores the cache.
 
+## Opening sequence, logo and filing complaints
+
+- `public/logo.svg` is the mark (a footpath in perspective, graded paver by paver) with the monoline
+  wordmark. The same strokes assemble in the opening sequence, then a shutter rises to reveal the map.
+  It plays once per browser session; `/?intro=1` replays it, `/?intro=0` skips it, and it stands down
+  for automation and for people who prefer reduced motion. `node scripts/render-intro.js` renders the
+  same animation to `public/intro.mp4` (1920x1080, 30 fps) for social posts and the pitch deck.
+- Every hazard row offers **Copy complaint draft**, **Open <authority> portal** and **File on Delhi
+  PGMS**. Portal links live in `knowledge/standards.json` under `authority_portals`; check them before
+  a demo, government URLs move. The **Path report** button opens the printable report, which ends with
+  a "Where to file" table for the authorities involved.
+- Numbered pins along a selected footpath show roughly where each hazard was photographed (exactly,
+  when the photo carried GPS). Hovering a footpath lists its worst hazards in the tooltip.
+
 ## Open data
 
 The map is not only what people photograph. **Add OpenStreetMap data for this area** (bottom left of

@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 200" role="img" aria-label="Rasta">
+  <title>Rasta</title>
+  <g fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <!-- mark: a footpath in perspective, graded paver by paver -->
+    <g transform="translate(24 44) scale(1.75)" stroke-width="4.5">
+      <path d="M14 56 L28 8" stroke="#F59E0B"/>
+      <path d="M50 56 L36 8" stroke="#F59E0B"/>
+      <path d="M19 46 H45" stroke="#DC2626"/>
+      <path d="M23 32 H41" stroke="#F59E0B"/>
+      <path d="M26 18 H38" stroke="#22C55E"/>
+    </g>
+    <!-- wordmark: monoline capitals -->
+    <g transform="translate(160 50)" stroke="#EEF2FA" stroke-width="12">
+      <g><path d="M8 100 V0 H40 A26 26 0 0 1 40 52 H8"/><path d="M36 52 L66 100"/></g>
+      <g transform="translate(92 0)"><path d="M4 100 L36 0 L68 100"/><path d="M18 58 H54"/></g>
+      <g transform="translate(184 0)"><path d="M64 20 C64 4 10 0 8 26 C6 52 66 44 66 74 C66 100 8 100 6 82"/></g>
+      <g transform="translate(276 0)"><path d="M0 0 H70"/><path d="M35 0 V100"/></g>
+      <g transform="translate(368 0)"><path d="M4 100 L36 0 L68 100"/><path d="M18 58 H54"/></g>
+    </g>
+  </g>
+</svg>

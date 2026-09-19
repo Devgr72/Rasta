@@ -1,11 +1,11 @@
 /* sw.js — service worker: caches the app shell, keeps the last good copy of the read-only API,
    and queues POST /api/segments in IndexedDB while offline, replaying when connectivity returns.
    Map tiles are never cached (size and tile-provider terms). Bump VERSION when shell files change. */
-const VERSION = 'rasta-v1';
+const VERSION = 'rasta-v1-intro';
 const SHELL = `${VERSION}-shell`;
 const DATA = `${VERSION}-data`;
 const SHELL_URLS = [
-  '/', '/index.html', '/styles.css', '/app.js', '/map.js', '/i18n.js', '/report.html', '/report.js',
+  '/', '/index.html', '/styles.css', '/app.js', '/map.js', '/i18n.js', '/intro.js', '/logo.svg', '/report.html', '/report.js',
   '/manifest.webmanifest', '/icons/icon.svg', '/icons/icon-maskable.svg',
   '/vendor/leaflet/leaflet.js', '/vendor/leaflet/leaflet.css', '/vendor/exifr/lite.umd.js',
   '/vendor/maplibre/maplibre-gl.js', '/vendor/maplibre/maplibre-gl.css', '/vendor/maplibre-leaflet/leaflet-maplibre-gl.js', '/vendor/googlemutant/Leaflet.GoogleMutant.js',

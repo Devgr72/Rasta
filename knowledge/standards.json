@@ -296,5 +296,37 @@
     "DJB": "Delhi Jal Board — drain covers, manholes, sewer lines",
     "DISCOM": "BSES / TPDDL — street lighting, poles, transformers",
     "Traffic Police": "Delhi Traffic Police — illegal parking on footpaths"
+  },
+  "authority_portals": {
+    "MCD": {
+      "label": "MCD online grievance (MCD 311)",
+      "url": "https://mcdonline.nic.in/",
+      "how": "Register a grievance under Public Grievance, or use the MCD 311 app. Attach the photo and paste the complaint draft."
+    },
+    "PWD": {
+      "label": "PWD Delhi public grievance",
+      "url": "https://pwddelhi.gov.in/",
+      "how": "Use the Public Grievance link. For arterial road footpaths, name the road and the nearest landmark."
+    },
+    "DJB": {
+      "label": "Delhi Jal Board complaints",
+      "url": "https://delhijalboard.delhi.gov.in/",
+      "how": "Open drains, missing covers and manholes. Helpline 1916 also logs complaints with a reference number."
+    },
+    "DISCOM": {
+      "label": "BSES / Tata Power-DDL",
+      "url": "https://www.bsesdelhi.com/",
+      "how": "BSES for south and east Delhi, Tata Power-DDL (tatapower-ddl.com) for north and north-west. Poles, transformers and street lighting."
+    },
+    "Traffic Police": {
+      "label": "Delhi Traffic Police",
+      "url": "https://traffic.delhipolice.gov.in/",
+      "how": "Vehicles parked on footpaths. The Traffic Sentinel app accepts a photo with location."
+    },
+    "_any": {
+      "label": "Delhi Government PGMS",
+      "url": "https://pgms.delhi.gov.in/",
+      "how": "Public Grievance Monitoring System: routes a complaint to any Delhi department and gives a tracking number. CPGRAMS (pgportal.gov.in) works for central agencies."
+    }
   }
 }

@@ -104,21 +104,26 @@
       baseLayer = rasterLayer(!spec.light).addTo(map);
       if (!spec.raster) noticeOnce('Vector map unavailable on this device, using OpenStreetMap tiles', 'error');
     } else {
+      // Raster tiles go underneath straight away so the map is never blank while the vector
+      // style downloads; they are removed once the style has painted.
+      const under = rasterLayer(!spec.light); under.addTo(map); under.getContainer()?.classList.add('tiles-under');
       const gl = L.maplibreGL({ style: spec.url, attribution: spec.attribution, interactive: false });
       baseLayer = gl.addTo(map);
       let ready = false;
-      const fallback = (why) => {
+      const fallback = (why, quiet) => {
         if (ready || baseLayer !== gl) return;
         ready = true;
         map.removeLayer(gl);
-        baseLayer = rasterLayer(!spec.light).addTo(map);
-        noticeOnce(`Vector map failed (${why}), using OpenStreetMap tiles`, 'error');
+        under.getContainer()?.classList.remove('tiles-under');
+        baseLayer = under;
+        if (!quiet) noticeOnce(`Vector map failed (${why}), using OpenStreetMap tiles`, 'error');
       };
       try {
         const m = gl.getMaplibreMap();
-        m.once('load', () => { ready = true; });
+        m.once('idle', () => { ready = true; if (baseLayer === gl && map.hasLayer(under)) setTimeout(() => map.removeLayer(under), 400); });
         m.on('error', (e) => { if (!ready && e?.error && /style|Failed to fetch|NetworkError|404|5\d\d/i.test(String(e.error.message || e.error))) fallback('style did not load'); });
-        setTimeout(() => { if (!ready) fallback('timed out'); }, 8000);
+        m.on('webglcontextlost', () => { ready = false; fallback('graphics context lost'); });
+        setTimeout(() => { if (!ready) fallback('timed out', true); }, 10000); // raster is already showing, no need to alarm anyone
       } catch (err) { fallback(err.message); }
     }
     restyleCasing();
@@ -130,6 +135,13 @@
     casing.eachLayer((l) => l.setStyle({ color: casingColor() }));
   }
 
+  // Leaflet caches its container size; anything that changes layout without a window resize
+  // (the intro shutter, the phone sheet, tab switches, returning to the tab) needs a nudge.
+  const nudge = (() => { let t; return () => { clearTimeout(t); t = setTimeout(() => map.invalidateSize({ pan: false }), 60); }; })();
+  if (window.ResizeObserver) new ResizeObserver(nudge).observe(document.getElementById('map'));
+  for (const ev of ['load', 'pageshow', 'orientationchange', 'rasta:intro-done']) window.addEventListener(ev, nudge);
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) nudge(); });
+
   // ---------- segments ----------
   const casing = L.layerGroup().addTo(map);
   const lines = L.layerGroup().addTo(map);
@@ -138,6 +150,15 @@
   let lens = 'score';
   let onSelect = null;
   let selectedId = null;
+  let labelFor = (id) => String(id).replace(/_/g, ' ');
+  let tipStrings = { osm: 'from OSM tags', clear: 'no hazards recorded' };
+  function setTypeLabels(fn, strings) { labelFor = fn; if (strings) tipStrings = { ...tipStrings, ...strings }; }
+  function tooltipHtml(p) {
+    const top = p.top_hazards || [];
+    const bad = top.some((h) => h.severity >= 4);
+    const line = top.length ? top.map((h) => `${escapeHtml(labelFor(h.type_id))}${h.n > 1 ? ` ×${h.n}` : ''}`).join(' · ') : tipStrings.clear;
+    return `<b>${p.score}</b> ${escapeHtml(p.name)}${p.source === 'osm' ? ` <span style="color:var(--ink-faint)">· ${tipStrings.osm}</span>` : ''}<small class="${bad ? 'bad' : ''}">${line}</small>`;
+  }
 
   function lensColor(props) {
     if (lens === 'score') return scoreColor(props.score);
@@ -155,7 +176,7 @@
       const w = osm ? 4 : 7;
       L.polyline(latlngs, { color: casingColor(), weight: osm ? 8 : 13, opacity: .95, className: 'seg-casing', interactive: false }).addTo(casing);
       const line = L.polyline(latlngs, { color: lensColor(p), weight: w, opacity: osm ? .9 : 1, className: `seg-line${osm ? ' seg-osm' : ''}`, lineCap: 'round', lineJoin: 'round' })
-        .bindTooltip(`<b>${p.score}</b> ${escapeHtml(p.name)}${osm ? ' <small>· OSM tags</small>' : ''}`, { className: 'seg-tip', direction: 'top', sticky: true, opacity: 1 })
+        .bindTooltip(() => tooltipHtml(p), { className: 'seg-tip', direction: 'top', sticky: true, opacity: 1 })
         .on('mouseover', () => line.setStyle({ weight: w + 3 }))
         .on('mouseout', () => { if (selectedId !== p.id) line.setStyle({ weight: w }); })
         .on('click', (e) => { L.DomEvent.stopPropagation(e); select(p.id, true); })
@@ -179,7 +200,61 @@
     }
     if (id != null && onSelect) onSelect(id, fromMap);
   }
-  function clearSelection() { select(null); }
+  function clearSelection() { select(null); clearHazardPins(); }
+
+  // ---------- hazard pins: where along the stretch each hazard was seen ----------
+  const pinLayer = L.layerGroup().addTo(map);
+  const pinsById = new Map();
+  function clearHazardPins() { pinLayer.clearLayers(); pinsById.clear(); }
+  function pointAlong(latlngs, frac) {
+    if (latlngs.length === 1) return latlngs[0];
+    const seg = []; let total = 0;
+    for (let i = 0; i < latlngs.length - 1; i++) { const d = map.distance(latlngs[i], latlngs[i + 1]); seg.push(d); total += d; }
+    let target = Math.max(0, Math.min(1, frac)) * total;
+    for (let i = 0; i < seg.length; i++) {
+      if (target <= seg[i] || i === seg.length - 1) {
+        const f = seg[i] ? target / seg[i] : 0;
+        const a = L.latLng(latlngs[i]), b = L.latLng(latlngs[i + 1]);
+        return [a.lat + (b.lat - a.lat) * f, a.lng + (b.lng - a.lng) * f];
+      }
+      target -= seg[i];
+    }
+    return latlngs[latlngs.length - 1];
+  }
+  // seg: full segment from /api/segments/:id. Photo GPS places a pin exactly; otherwise pins are
+  // spread along the line in photo order so the map still says roughly where the damage is.
+  function showHazardPins(seg) {
+    clearHazardPins();
+    const s = byId.get(seg.id);
+    const latlngs = s ? s.latlngs : (seg.geometry?.coordinates || [[seg.start.lng, seg.start.lat], [seg.end.lng, seg.end.lat]]).map(([lng, lat]) => [lat, lng]);
+    const photos = seg.photos || [];
+    const byPhoto = new Map();
+    for (const h of seg.hazards) { const k = h.photo_id ?? 'none'; if (!byPhoto.has(k)) byPhoto.set(k, []); byPhoto.get(k).push(h); }
+    const keys = [...byPhoto.keys()];
+    let n = 0;
+    seg.hazards.forEach((h, idx) => {
+      const k = h.photo_id ?? 'none';
+      const photo = photos.find((p) => p.id === h.photo_id);
+      const group = byPhoto.get(k); const j = group.indexOf(h);
+      let ll;
+      if (photo && photo.photo_lat != null && photo.photo_lng != null) ll = [photo.photo_lat, photo.photo_lng];
+      else {
+        const pi = Math.max(0, keys.indexOf(k));
+        const base = (pi + 0.5) / keys.length;
+        const spread = group.length > 1 ? ((j / (group.length - 1)) - 0.5) * (0.6 / keys.length) : 0;
+        ll = pointAlong(latlngs, base + spread);
+      }
+      const cls = h.severity >= 4 ? 'hi' : h.severity <= 2 ? 'lo' : '';
+      const icon = L.divIcon({ className: '', html: `<div class="hz-pin ${cls}" style="--d:${(n++ * 0.06).toFixed(2)}s" title="${escapeHtml(labelFor(h.type_id))}">${idx + 1}</div>`, iconSize: [26, 26], iconAnchor: [13, 13] });
+      const m = L.marker(ll, { icon, keyboard: false, zIndexOffset: 500 }).addTo(pinLayer);
+      m.on('click', (e) => { L.DomEvent.stopPropagation(e); window.dispatchEvent(new CustomEvent('rasta:hazard-pin', { detail: { id: h.id, index: idx } })); });
+      pinsById.set(h.id, m);
+    });
+  }
+  function hotPin(id, on) {
+    const node = m && m.getElement() ? m.getElement().querySelector('.hz-pin') : null;
+    if (node) node.classList.toggle('is-hot', !!on);
+  }
 
   function flyToSegment(id) {
     const s = byId.get(id);
@@ -362,6 +437,7 @@
     drawRoutes, clearRoutes, highlightRoute,
     drawRouteHazards, clearRouteHazards, highlightRouteHazard, walkAlong, stopWalk, isWalking: () => !!walker,
     locate, invalidate: () => map.invalidateSize(),
+    setTypeLabels, showHazardPins, clearHazardPins, hotPin,
     setBasemap, getBasemap: () => basemap, setOnBasemapChange: (fn) => { onBasemapChange = fn; }, enableGoogle,
     getBounds: () => { const b = map.getBounds(); return { south: b.getSouth(), west: b.getWest(), north: b.getNorth(), east: b.getEast() }; },
     getZoom: () => map.getZoom(),
