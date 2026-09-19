@@ -424,7 +424,7 @@
     return t(`imp.${p}.${Math.min(5, Math.max(1, r))}`);
   }
   function renderImpactPanel(seg, p, host, shots) {
-    const risky = seg.hazards.map((h) => ({ h, r: riskOf(h, p) })).filter((x) => x.r >= 2).sort((a, b) => b.r - a.r || b.h.severity - a.h.severity);
+    const risky = seg.hazards.filter((h) => h.status !== 'cleared').map((h) => ({ h, r: riskOf(h, p) })).filter((x) => x.r >= 2) // reported-cleared hazards are no longer in anyone's way.sort((a, b) => b.r - a.r || b.h.severity - a.h.severity);
     const v = seg.verdicts[p];
     const times = seg.times || {}; const free = seg.free_time_min || Math.max(1, Math.round(seg.length_m / 1.35 / 60));
     const mine = times[p]; const extra = mine != null ? Math.max(0, mine - free) : 0;
