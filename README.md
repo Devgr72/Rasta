@@ -35,6 +35,25 @@ npm run shoot                                # headless Chrome walk-through, scr
 - Vision responses are cached in `data/vision-cache/` by photo hash. Re-running the demo costs nothing.
 - `/report.html?id=<segment>` is the printable engineer's report with a reference number.
 
+## Open data
+
+The map is not only what people photograph. **Add OpenStreetMap data for this area** (bottom left of
+the Map tab) pulls every footway, sidewalk and road in view from OpenStreetMap via Overpass and grades
+the ones whose tags say something about accessibility: `wheelchair`, `smoothness`, `surface`, `kerb`,
+`tactile_paving`, `width`, `incline`, `lit`, `sidewalk=no`, and `highway=steps`. Tags are translated
+into the same hazard types a photo produces, so the scoring rules are identical. Tag-derived footpaths
+draw thinner, say "graded from OpenStreetMap tags" in the panel, link to the OSM way, and carry a
+"verify with photos" button that prefills the Walk tab.
+
+When someone marks a stretch that is already mapped, the Walk tab says so and lists the earlier
+readings. The segment panel shows "Also mapped here" for every other reading within 60 m.
+
+## Map styles
+
+Dark and Light are vector tiles from OpenFreeMap (free, no key) rendered by MapLibre inside Leaflet.
+Streets is raster OpenStreetMap, loaded at retina resolution. If `GOOGLE_MAPS_KEY` is set in `.env`
+a Google option appears, styled to match; restrict that key by HTTP referrer in Google Cloud.
+
 ## Layout
 
 ```
@@ -42,7 +61,7 @@ server.js        Express, all routes, seeding, OSRM with fallback
 db.js            SQLite schema + queries (better-sqlite3)
 vision.js        Anthropic call, knowledge injection, JSON repair, hash cache — the only file with the key
 scoring.js       Segment score, persona verdicts, cost, route scoring
-knowledge/standards.json   21 hazard types, dimensional standards, authorities
+knowledge/standards.json   23 hazard types, dimensional standards, authorities
 public/          index.html, app.js, map.js, styles.css, report.html
 data/            seed.json, demo-route.json (rasta.db and vision-cache are gitignored)
 evals/           cases.json ground truth + run.js
@@ -58,6 +77,9 @@ evals/           cases.json ground truth + run.js
 | POST | `/api/route` | `{from, to, persona}` -> scored OSRM alternatives, `recommended_index` |
 | GET | `/api/stats` | segments, hazards, km, average, total cost |
 | GET | `/api/standards` | the knowledge file |
+| GET | `/api/segments/near?lat&lng&r` | readings within `r` metres, nearest first |
+| POST | `/api/import/osm` | `{south,west,north,east}` -> grades tagged OSM ways in the box, deduplicated by way id |
+| GET | `/api/config` | browser-safe config (Google key if set) |
 
 ## Scoring
 

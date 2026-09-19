@@ -22,13 +22,50 @@
     dark: { url: 'https://tiles.openfreemap.org/styles/dark', attribution: `${OSM_ATTR} &copy; <a href="https://openfreemap.org">OpenFreeMap</a>`, casing: '#0B1120', light: false },
     light: { url: 'https://tiles.openfreemap.org/styles/positron', attribution: `${OSM_ATTR} &copy; <a href="https://openfreemap.org">OpenFreeMap</a>`, casing: '#FFFFFF', light: true },
     streets: { raster: true, casing: '#FFFFFF', light: true },
+    google: { google: true, casing: '#0B1120', light: false },
   };
+  let googleKey = null;
+  // Slate night styling for Google's roadmap so it sits in the same register.
+  const GOOGLE_STYLE = [
+    { elementType: 'geometry', stylers: [{ color: '#111a2e' }] },
+    { elementType: 'labels.text.fill', stylers: [{ color: '#8a9bb5' }] },
+    { elementType: 'labels.text.stroke', stylers: [{ color: '#0f172a' }] },
+    { featureType: 'poi', stylers: [{ visibility: 'off' }] },
+    { featureType: 'transit', elementType: 'labels.icon', stylers: [{ visibility: 'off' }] },
+    { featureType: 'road', elementType: 'geometry', stylers: [{ color: '#22304a' }] },
+    { featureType: 'road', elementType: 'geometry.stroke', stylers: [{ color: '#0f172a' }] },
+    { featureType: 'road.highway', elementType: 'geometry', stylers: [{ color: '#33445f' }] },
+    { featureType: 'water', elementType: 'geometry', stylers: [{ color: '#0b1324' }] },
+    { featureType: 'landscape.natural', elementType: 'geometry', stylers: [{ color: '#121d31' }] },
+    { featureType: 'poi.park', elementType: 'geometry', stylers: [{ color: '#132033' }] },
+  ];
+  let googleLoading = null;
+  function loadGoogle() {
+    if (window.google?.maps) return Promise.resolve();
+    if (googleLoading) return googleLoading;
+    googleLoading = new Promise((resolve, reject) => {
+      const el = document.createElement('script');
+      el.src = `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(googleKey)}&v=weekly&loading=async&callback=__rastaGoogleReady`;
+      window.__rastaGoogleReady = () => resolve();
+      el.onerror = () => reject(new Error('Google Maps script failed to load'));
+      document.head.appendChild(el);
+      setTimeout(() => reject(new Error('Google Maps timed out')), 10000);
+    });
+    return googleLoading;
+  }
+  function enableGoogle(key) {
+    googleKey = key;
+    const btn = document.querySelector('[data-basemap="google"]');
+    if (btn) btn.hidden = !key;
+  }
   let baseLayer = null;
   let basemap = null;
   let onBasemapChange = null;
 
+  // detectRetina asks for one zoom level deeper on HiDPI screens so raster
+  // tiles are crisp instead of upscaled.
   function rasterLayer(mono) {
-    return L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: OSM_ATTR, className: mono ? 'tiles-mono' : '' });
+    return L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, maxNativeZoom: 19, detectRetina: true, attribution: OSM_ATTR, className: mono ? 'tiles-mono' : '' });
   }
 
   function notice(text, kind) { window.dispatchEvent(new CustomEvent('rasta:notice', { detail: { text, kind } })); }
@@ -50,7 +87,12 @@
     document.body.classList.toggle('map-light', !!spec.light);
     document.body.dataset.basemap = name;
 
-    if (spec.raster || !window.maplibregl || !L.maplibreGL || !hasWebGL()) {
+    if (spec.google) {
+      if (!googleKey || !L.gridLayer?.googleMutant) { setBasemap('dark'); return; }
+      const g = L.gridLayer.googleMutant({ type: 'roadmap', styles: GOOGLE_STYLE, maxZoom: 21 });
+      baseLayer = g.addTo(map);
+      loadGoogle().catch((err) => { if (baseLayer === g) { notice(`${err.message}; showing the dark map instead`, 'error'); setBasemap('dark'); } });
+    } else if (spec.raster || !window.maplibregl || !L.maplibreGL || !hasWebGL()) {
       baseLayer = rasterLayer(!spec.light).addTo(map);
       if (!spec.raster) noticeOnce('Vector map unavailable on this device, using OpenStreetMap tiles', 'error');
     } else {
@@ -101,14 +143,16 @@
     for (const f of features) {
       const latlngs = f.geometry.coordinates.map(([lng, lat]) => [lat, lng]);
       const p = f.properties;
-      L.polyline(latlngs, { color: casingColor(), weight: 13, opacity: .95, className: 'seg-casing', interactive: false }).addTo(casing);
-      const line = L.polyline(latlngs, { color: lensColor(p), weight: 7, opacity: 1, className: 'seg-line', lineCap: 'round' })
-        .bindTooltip(`<b>${p.score}</b> ${escapeHtml(p.name)}`, { className: 'seg-tip', direction: 'top', sticky: true, opacity: 1 })
-        .on('mouseover', () => line.setStyle({ weight: 10 }))
-        .on('mouseout', () => { if (selectedId !== p.id) line.setStyle({ weight: 7 }); })
+      const osm = p.source === 'osm'; // tag-derived: thinner, so photographed walks stand out
+      const w = osm ? 4 : 7;
+      L.polyline(latlngs, { color: casingColor(), weight: osm ? 8 : 13, opacity: .95, className: 'seg-casing', interactive: false }).addTo(casing);
+      const line = L.polyline(latlngs, { color: lensColor(p), weight: w, opacity: osm ? .9 : 1, className: `seg-line${osm ? ' seg-osm' : ''}`, lineCap: 'round', lineJoin: 'round' })
+        .bindTooltip(`<b>${p.score}</b> ${escapeHtml(p.name)}${osm ? ' <small>· OSM tags</small>' : ''}`, { className: 'seg-tip', direction: 'top', sticky: true, opacity: 1 })
+        .on('mouseover', () => line.setStyle({ weight: w + 3 }))
+        .on('mouseout', () => { if (selectedId !== p.id) line.setStyle({ weight: w }); })
         .on('click', (e) => { L.DomEvent.stopPropagation(e); select(p.id, true); })
         .addTo(lines);
-      byId.set(p.id, { line, props: p, latlngs });
+      byId.set(p.id, { line, props: p, latlngs, w });
     }
     if (selectedId != null && !byId.has(selectedId)) selectedId = null;
   }
@@ -120,8 +164,8 @@
 
   function select(id, fromMap) {
     selectedId = id;
-    for (const [sid, { line }] of byId) {
-      line.setStyle({ weight: sid === id ? 10 : 7 });
+    for (const [sid, { line, w }] of byId) {
+      line.setStyle({ weight: sid === id ? w + 3 : w });
       if (id != null) line.getElement()?.classList.toggle('is-dim', sid !== id);
       else line.getElement()?.classList.remove('is-dim');
     }
@@ -246,7 +290,9 @@
     startPicking, stopPicking, clearPicks, setPicks,
     drawRoutes, clearRoutes, highlightRoute,
     locate, invalidate: () => map.invalidateSize(),
-    setBasemap, getBasemap: () => basemap, setOnBasemapChange: (fn) => { onBasemapChange = fn; },
+    setBasemap, getBasemap: () => basemap, setOnBasemapChange: (fn) => { onBasemapChange = fn; }, enableGoogle,
+    getBounds: () => { const b = map.getBounds(); return { south: b.getSouth(), west: b.getWest(), north: b.getNorth(), east: b.getEast() }; },
+    getZoom: () => map.getZoom(),
     getFeatures: () => features,
   };
 })();

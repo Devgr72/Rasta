@@ -30,6 +30,7 @@
     <div><dt>hazards found</dt><dd data-stat="hazards">0</dd></div>
     <div><dt>km covered</dt><dd data-stat="km_covered">0</dd></div>
     <div><dt>to fix everything</dt><dd data-stat="total_cost_inr">₹0</dd></div>
+    <div data-stat-wrap="open_data_segments" hidden><dt>from open data</dt><dd data-stat="open_data_segments">0</dd></div>
   </dl>
   <div class="ledger-status" id="ledger-status" hidden></div>
 </header>
@@ -59,6 +60,10 @@
     <button class="lens-opt" role="radio" aria-checked="false" data-lens="senior">Senior</button>
   </div>
   <p class="lens-note" id="lens-note"></p>
+  <button type="button" class="ghost import-btn" id="btn-import">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12M7 10l5 5 5-5M4 19h16"/></svg>
+    <span>Add OpenStreetMap data for this area</span>
+  </button>
 </div>
 
 <div class="map-buttons">
@@ -74,12 +79,14 @@
   <button class="basemap-opt" role="radio" aria-checked="false" data-basemap="dark" title="Dark map">Dark</button>
   <button class="basemap-opt" role="radio" aria-checked="false" data-basemap="light" title="Light map">Light</button>
   <button class="basemap-opt" role="radio" aria-checked="false" data-basemap="streets" title="Standard OpenStreetMap">Streets</button>
+  <button class="basemap-opt" role="radio" aria-checked="false" data-basemap="google" title="Google Maps" hidden>Google</button>
 </div>
 
 <div class="legend" id="legend" aria-hidden="true">
   <span><i style="--c:#22C55E"></i>above 70</span>
   <span><i style="--c:#F59E0B"></i>40 to 70</span>
   <span><i style="--c:#DC2626"></i>under 40</span>
+  <span><i class="thin" style="--c:#9AA8C2"></i>thin: from OpenStreetMap tags</span>
 </div>
 
 <!-- the panel: right sheet on desktop, bottom sheet on phones -->
@@ -116,6 +123,7 @@
               <span class="points-len" id="points-len"></span>
               <button type="button" class="ghost" id="btn-clear-points">Clear</button>
             </div>
+            <div class="nearby" id="nearby" hidden></div>
           </div>
 
           <div class="step" data-step="name">
@@ -233,12 +241,15 @@
       </div>
       <button class="close" data-el="close" aria-label="Close">×</button>
     </header>
+    <p class="seg-source" data-el="source" hidden></p>
     <ul class="verdicts" data-el="verdicts"></ul>
     <div class="photos" data-el="photos"></div>
     <div class="hazards" data-el="hazards"></div>
     <div class="cost" data-el="cost"></div>
+    <div class="also" data-el="also"></div>
     <div class="seg-actions">
-      <a class="ghost" data-el="report" target="_blank" rel="noopener">Open engineer's report</a>
+      <button type="button" class="primary" data-el="walk">Walk this stretch with photos</button>
+      <a class="ghost" data-el="report" target="_blank" rel="noopener">Engineer's report</a>
     </div>
   </article>
 </template>
@@ -246,6 +257,7 @@
 <script src="/vendor/leaflet/leaflet.js"></script>
 <script src="/vendor/maplibre/maplibre-gl.js"></script>
 <script src="/vendor/maplibre-leaflet/leaflet-maplibre-gl.js"></script>
+<script src="/vendor/googlemutant/Leaflet.GoogleMutant.js"></script>
 <script src="/map.js"></script>
 <script src="/app.js"></script>
 </body>

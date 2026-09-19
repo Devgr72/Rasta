@@ -356,3 +356,27 @@ body.map-light .ledger-figures dd { color: var(--slate-900); }
 body.map-light .ledger-figures dt { color: #4B5563; }
 body.map-light .ledger-status { background: #fff; }
 @media (max-width: 860px) { body.map-light .ledger-brand { color: var(--amber-dim); } }
+
+/* open data */
+.import-btn { align-self: flex-start; gap: 8px; background: var(--slate-850); }
+.import-btn svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; }
+.import-btn.is-busy svg { animation: spin 1s linear infinite; }
+.legend i.thin { height: 2px; }
+.seg-source { font-size: 12px; color: var(--ink-dim); background: var(--slate-800); border-left: 3px solid var(--ink-faint); padding: 8px 10px; margin-bottom: 10px; border-radius: 0 var(--radius) var(--radius) 0; }
+.seg-source a { color: var(--ink); }
+.nearby { margin-top: 10px; font-size: 13px; color: var(--ink-dim); background: var(--slate-800); border-left: 3px solid var(--amber); padding: 10px 12px; border-radius: 0 var(--radius) var(--radius) 0; }
+.nearby b { color: var(--ink); }
+.nearby ul { margin: 6px 0 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 4px; }
+.nearby li { display: flex; justify-content: space-between; gap: 10px; }
+.nearby li button { color: var(--amber); text-align: left; }
+.nearby .sc { font-weight: 600; font-variant-numeric: tabular-nums; }
+.also { margin-top: 12px; border-top: 1px solid var(--slate-700); padding-top: 12px; font-size: 13px; }
+.also:empty { display: none; }
+.also h3 { font-size: 13px; font-weight: 600; margin-bottom: 6px; }
+.also ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.also li button { display: grid; grid-template-columns: 34px 1fr auto; gap: 10px; align-items: center; width: 100%; text-align: left; padding: 8px 10px; background: var(--slate-800); border-radius: var(--radius); color: var(--ink-dim); }
+.also li button:hover { color: var(--ink); }
+.also .sc { width: 34px; height: 26px; border-radius: 3px; display: grid; place-items: center; font-weight: 700; color: var(--slate-900); font-size: 13px; }
+.also small { color: var(--ink-faint); }
+.seg-actions .primary { flex: 1; width: auto; min-height: 44px; padding: 10px 14px; font-size: 14px; }
+@media (max-width: 860px) { .import-btn { align-self: stretch; justify-content: center; } .import-btn span { font-size: 12px; } .legend span:last-child { display: none; } }

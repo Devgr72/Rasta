@@ -20,6 +20,7 @@ app.use(express.static(path.join(__dirname, 'public'), { extensions: ['html'] })
 app.use('/uploads', express.static(UPLOAD_DIR, { maxAge: '7d', immutable: true }));
 app.use('/vendor/leaflet', express.static(path.join(__dirname, 'node_modules', 'leaflet', 'dist'), { maxAge: '30d', immutable: true }));
 app.use('/vendor/maplibre', express.static(path.join(__dirname, 'node_modules', 'maplibre-gl', 'dist'), { maxAge: '30d', immutable: true }));
+app.use('/vendor/googlemutant', express.static(path.join(__dirname, 'node_modules', 'leaflet.gridlayer.googlemutant', 'dist'), { maxAge: '30d', immutable: true }));
 app.use('/vendor/maplibre-leaflet', express.static(path.join(__dirname, 'node_modules', '@maplibre', 'maplibre-gl-leaflet'), { maxAge: '30d', immutable: true }));
 
 const upload = multer({
@@ -101,6 +102,27 @@ async function analyseAndSave({ name, start, end }, buffers, onPhoto) {
 // ---------- API ----------
 app.get('/api/health', (_req, res) => res.json({ ok: true, model: vision.MODEL, mock: vision.MOCK }));
 
+// Public-safe config for the browser. The Google key is meant to be exposed
+// (restrict it by HTTP referrer in Google Cloud); the Anthropic key never is.
+app.get('/api/config', (_req, res) => res.json({ google_maps_key: process.env.GOOGLE_MAPS_KEY || null }));
+
+// Segments near a point, nearest first. Powers "already mapped here".
+app.get('/api/segments/near', (req, res) => {
+  const p = parsePoint({ lat: req.query.lat, lng: req.query.lng });
+  const r = Math.min(500, Math.max(10, Number(req.query.r) || 80));
+  if (!p) return fail(res, 400, 'lat and lng required');
+  try {
+    const out = [];
+    for (const s of db.allSegments()) {
+      const pts = s.geometry ? s.geometry.map(([lng, lat]) => ({ lat, lng })) : [s.start, s.end];
+      const d = scoring.distanceToLine(p, pts);
+      if (d <= r) out.push({ ...s, geometry: undefined, tags: undefined, distance_m: Math.round(d) });
+    }
+    out.sort((a, b) => a.distance_m - b.distance_m);
+    res.json({ ok: true, count: out.length, segments: out.slice(0, 20) });
+  } catch (err) { fail(res, 500, err.message); }
+});
+
 app.get('/api/standards', (_req, res) => res.json(scoring.STANDARDS));
 
 app.get('/api/stats', (_req, res) => {
@@ -144,6 +166,68 @@ app.post('/api/segments', upload.array('photos', 12), async (req, res) => {
     console.error('[segment] failed', err);
     if (stream) { res.write(JSON.stringify({ type: 'error', error: err.message }) + '\n'); return res.end(); }
     fail(res, 500, `analysis failed: ${err.message}`);
+  }
+});
+
+// ---------- open data: OpenStreetMap via Overpass ----------
+const OVERPASS = [process.env.OVERPASS_URL || 'https://overpass-api.de/api/interpreter', 'https://overpass.kumi.systems/api/interpreter'];
+const UA = 'rasta-footpath-map/0.1 (+https://github.com/Devgr72/Rasta)';
+
+async function queryOverpass(bbox) {
+  const b = `${bbox.south},${bbox.west},${bbox.north},${bbox.east}`;
+  const q = `[out:json][timeout:25];(
+    way["highway"~"^(footway|path|pedestrian|steps|living_street)$"](${b});
+    way["footway"="sidewalk"](${b});
+    way["highway"~"^(residential|tertiary|secondary|primary|unclassified|trunk)$"]["sidewalk"](${b});
+  );out geom;`;
+  let lastErr;
+  for (const url of OVERPASS) {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 30000);
+    try {
+      const r = await fetch(url, { method: 'POST', body: new URLSearchParams({ data: q }), headers: { 'User-Agent': UA }, signal: ctrl.signal });
+      if (!r.ok) throw new Error(`Overpass ${r.status}`);
+      return await r.json();
+    } catch (err) { lastErr = err; console.warn('[osm]', url, err.message); }
+    finally { clearTimeout(timer); }
+  }
+  throw lastErr || new Error('Overpass unavailable');
+}
+
+// POST /api/import/osm {south,west,north,east} -> grades every way in the box
+// whose tags say something about accessibility, stores them as source='osm'.
+app.post('/api/import/osm', async (req, res) => {
+  const b = req.body || {};
+  const bbox = { south: num(b.south), west: num(b.west), north: num(b.north), east: num(b.east) };
+  if (Object.values(bbox).some((v) => !Number.isFinite(v)) || bbox.north <= bbox.south || bbox.east <= bbox.west) return fail(res, 400, 'bbox {south,west,north,east} required');
+  const area = (bbox.north - bbox.south) * (bbox.east - bbox.west);
+  if (area > 0.03) return fail(res, 400, 'Zoom in a little: the area is too large to import in one go (max about 5 km across)');
+  try {
+    const t0 = Date.now();
+    const data = await queryOverpass(bbox);
+    const known = db.knownOsmIds();
+    let imported = 0, skipped = 0, silent = 0;
+    for (const w of (data.elements || []).filter((e) => e.type === 'way' && Array.isArray(e.geometry) && e.geometry.length >= 2)) {
+      if (known.has(w.id)) { skipped++; continue; }
+      const obs = scoring.tagsToObservation(w.tags || {});
+      if (!obs) { silent++; continue; }
+      const geometry = w.geometry.map((g) => [g.lon, g.lat]);
+      const start = { lat: geometry[0][1], lng: geometry[0][0] };
+      const end = { lat: geometry.at(-1)[1], lng: geometry.at(-1)[0] };
+      const kind = w.tags.highway === 'steps' ? 'Steps' : w.tags.footway === 'sidewalk' ? 'Footpath' : /footway|path|pedestrian/.test(w.tags.highway) ? 'Footway' : 'Road';
+      const name = w.tags.name ? `${w.tags.name} (${kind.toLowerCase()})` : `${kind} near ${start.lat.toFixed(4)}, ${start.lng.toFixed(4)}`;
+      const photo = { ...obs, hazards: obs.hazards.map(scoring.enrichHazard).filter(Boolean), status: 'osm', filename: null };
+      const graded = scoring.gradeSegment({ name, start, end, geometry, source: 'osm', osm_id: w.id, tags: w.tags }, [photo]);
+      if (graded.length_m < 15) { silent++; continue; }
+      db.saveSegment(graded, [photo]);
+      known.add(w.id); imported++;
+      if (imported >= 400) break;
+    }
+    console.log(`[osm] imported ${imported}, already had ${skipped}, no accessibility tags ${silent}, ${Date.now() - t0}ms`);
+    res.json({ ok: true, imported, already_known: skipped, without_tags: silent, ways_seen: (data.elements || []).length });
+  } catch (err) {
+    console.error('[osm] import failed', err.message);
+    fail(res, 502, `OpenStreetMap import failed: ${err.message}`);
   }
 });
 
@@ -223,7 +307,7 @@ function seedIfEmpty() {
     const seed = require('./data/seed.json');
     for (const s of seed.segments) {
       const photos = s.photos.map((p) => ({ ...p, hazards: (p.hazards || []).map(scoring.enrichHazard).filter(Boolean), status: 'seed' }));
-      const graded = scoring.gradeSegment({ name: s.name, start: s.start, end: s.end }, photos);
+      const graded = scoring.gradeSegment({ name: s.name, start: s.start, end: s.end, source: 'walk' }, photos);
       db.saveSegment(graded, photos);
     }
     console.log(`[seed] loaded ${seed.segments.length} segments`);

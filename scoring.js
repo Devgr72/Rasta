@@ -90,7 +90,7 @@ function personaVerdicts(hazards, clearWidth) {
  * Combine per-photo vision results into one graded segment.
  * photos: [{ hazards, estimated_clear_width_m, surface_type, ... }]
  */
-function gradeSegment({ name, start, end }, photoResults) {
+function gradeSegment({ name, start, end, geometry, source, osm_id, tags }, photoResults) {
   const hazards = [];
   const photos = photoResults.map((r) => {
     const enriched = (r.hazards || []).map(enrichHazard).filter(Boolean);
@@ -112,7 +112,11 @@ function gradeSegment({ name, start, end }, photoResults) {
     name,
     start,
     end,
-    length_m: Math.round(haversine(start, end)),
+    length_m: Math.round(geometry && geometry.length > 1 ? geometry.slice(1).reduce((acc, c, i) => acc + haversine({ lng: geometry[i][0], lat: geometry[i][1] }, { lng: c[0], lat: c[1] }), 0) : haversine(start, end)),
+    geometry: geometry || null,
+    source: source || 'walk',
+    osm_id: osm_id || null,
+    tags: tags || null,
     score,
     clear_width_m: clearWidth,
     surface_type: surface,
@@ -121,6 +125,89 @@ function gradeSegment({ name, start, end }, photoResults) {
     cost_by_authority: authorities,
     hazards,
     photos,
+  };
+}
+
+/** Metres from a point to a polyline given as [{lat,lng}] */
+function distanceToLine(p, pts) {
+  let best = Infinity;
+  for (let i = 0; i < pts.length - 1; i++) {
+    const a = pts[i], b = pts[i + 1];
+    // project in a local flat frame (fine at street scale)
+    const kx = Math.cos((a.lat * Math.PI) / 180);
+    const ax = a.lng * kx, ay = a.lat, bx = b.lng * kx, by = b.lat, px = p.lng * kx, py = p.lat;
+    const dx = bx - ax, dy = by - ay;
+    const len2 = dx * dx + dy * dy;
+    const t = len2 ? Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / len2)) : 0;
+    const q = { lat: ay + dy * t, lng: (ax + dx * t) / kx };
+    best = Math.min(best, haversine(p, q));
+  }
+  return pts.length === 1 ? haversine(p, pts[0]) : best;
+}
+
+const BAD_SURFACES = new Set(['unpaved', 'ground', 'dirt', 'earth', 'mud', 'sand', 'gravel', 'fine_gravel', 'grass', 'compacted', 'pebblestone', 'rock']);
+const ROADS = new Set(['residential', 'tertiary', 'secondary', 'primary', 'unclassified', 'trunk', 'living_street', 'tertiary_link', 'secondary_link', 'primary_link']);
+
+function parseIncline(v) {
+  if (!v) return null;
+  const m = /^(-?\d+(?:\.\d+)?)\s*%$/.exec(v.trim());
+  if (m) return Math.abs(Number(m[1]));
+  const r = /^1\s*:\s*(\d+(?:\.\d+)?)$/.exec(v.trim());
+  if (r) return 100 / Number(r[1]);
+  return null;
+}
+function parseWidth(v) {
+  if (!v) return null;
+  const m = /^(\d+(?:\.\d+)?)\s*(m|metre|meter)?s?$/i.exec(v.trim());
+  return m ? Number(m[1]) : null;
+}
+
+/**
+ * Turn OpenStreetMap way tags into the same observation shape a photo yields,
+ * so tag-derived footpaths are graded by exactly the same rules. Returns null
+ * when the tags say nothing about accessibility.
+ */
+function tagsToObservation(tags = {}) {
+  const hazards = [];
+  const notes = [];
+  const add = (type_id, severity, note) => hazards.push({ type_id, severity, bbox: null, note: `${note} (OpenStreetMap)` });
+  const hw = tags.highway;
+  let relevant = false;
+
+  if (hw === 'steps' && !/ramp/.test(tags.ramp || '') && tags['ramp:wheelchair'] !== 'yes') { add('steps_on_path', 4, `${tags.step_count ? tags.step_count + ' steps' : 'Steps'} with no ramp`); relevant = true; }
+  if (tags.wheelchair === 'no') { relevant = true; if (hw !== 'steps') add('steps_on_path', 3, 'Tagged not usable by wheelchair, usually steps or kerbs at the ends'); }
+  if (tags.wheelchair === 'limited') { relevant = true; add('uneven_level', 2, 'Tagged limited wheelchair access'); }
+  if (tags.wheelchair === 'yes') { relevant = true; notes.push('tagged wheelchair accessible'); }
+
+  const sm = tags.smoothness;
+  if (sm) {
+    relevant = true;
+    const sev = { intermediate: 1, bad: 3, very_bad: 4, horrible: 5, very_horrible: 5, impassable: 5 }[sm];
+    if (sev) add('uneven_level', sev, `Surface smoothness tagged "${sm.replace('_', ' ')}"`); else notes.push(`smoothness ${sm}`);
+  }
+  if (tags.surface) {
+    if (BAD_SURFACES.has(tags.surface)) { relevant = true; if (!hazards.some((h) => h.type_id === 'uneven_level')) add('uneven_level', tags.surface === 'mud' ? 4 : 3, `Unpaved surface (${tags.surface})`); }
+    else notes.push(`surface ${tags.surface}`); // a good surface alone is not evidence enough to grade a footpath
+  }
+  if (tags.kerb === 'raised') { relevant = true; add('high_kerb', 3, 'Raised kerb without a ramp'); }
+  if (tags.kerb === 'lowered' || tags.kerb === 'flush') { relevant = true; notes.push(`kerb ${tags.kerb}`); }
+  if (tags.tactile_paving === 'no') { relevant = true; add('missing_tactile', 2, 'No tactile paving'); }
+  if (tags.tactile_paving === 'yes') { relevant = true; notes.push('tactile paving present'); }
+  if (tags.lit === 'no') { relevant = true; add('missing_streetlight', 2, 'Not lit at night'); }
+  const width = parseWidth(tags.width);
+  if (width != null) { relevant = true; if (width < 1.2) add('narrow_path', 3, `Tagged width ${width} m`); else if (width < 1.8) add('narrow_path', 2, `Tagged width ${width} m, under the 1.8 m standard`); else notes.push(`width ${width} m`); }
+  const inc = parseIncline(tags.incline);
+  if (inc != null) { relevant = true; if (inc > 12) add('steep_ramp', 4, `Incline ${tags.incline}, steeper than 1:8`); else if (inc > 8.4) add('steep_ramp', 3, `Incline ${tags.incline}, steeper than 1:12`); }
+  if (ROADS.has(hw) && /^(no|none)$/.test(tags.sidewalk || '')) { relevant = true; add('no_footpath', /^(primary|secondary|trunk)$/.test(hw) ? 4 : 3, `Road mapped with no footpath (${hw.replace('_', ' ')})`); }
+  if (ROADS.has(hw) && /^(both|left|right|separate)$/.test(tags.sidewalk || '')) { relevant = true; notes.push(`footpath on ${tags.sidewalk} side${tags.sidewalk === 'both' ? 's' : ''}`); }
+
+  if (!relevant) return null;
+  const surface_type = tags.surface === 'mud' ? 'mud' : /paving_stones|sett|cobblestone|unhewn/.test(tags.surface || '') ? 'paver' : /concrete/.test(tags.surface || '') ? 'concrete' : /asphalt/.test(tags.surface || '') ? 'asphalt' : BAD_SURFACES.has(tags.surface) ? 'none' : 'none';
+  return {
+    surface_type,
+    hazards,
+    estimated_clear_width_m: width,
+    observations: `From OpenStreetMap tags${notes.length ? ': ' + notes.join(', ') : ''}. Not yet photographed.`,
   };
 }
 
@@ -171,4 +258,4 @@ function scoreRoute(coords, segments, { sampleEveryM = 25, radiusM = 40 } = {}) 
   return { score, coverage, samples: samples.length, segments: [...hit.values()] };
 }
 
-module.exports = { haversine, enrichHazard, scoreFromHazards, personaVerdicts, gradeSegment, scoreRoute, TYPES, STANDARDS };
+module.exports = { haversine, distanceToLine, enrichHazard, scoreFromHazards, personaVerdicts, gradeSegment, scoreRoute, tagsToObservation, TYPES, STANDARDS };

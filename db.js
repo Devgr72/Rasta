@@ -5,8 +5,25 @@ const Database = require('better-sqlite3');
 
 const DB_PATH = process.env.RASTA_DB || path.join(__dirname, 'data', 'rasta.db');
 fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
-const db = new Database(DB_PATH);
-db.pragma('journal_mode = WAL');
+function openDb() {
+  const d = new Database(DB_PATH);
+  d.pragma('journal_mode = WAL');
+  return d;
+}
+let db;
+try {
+  db = openDb();
+} catch (err) {
+  // A stale -shm/-wal pair left by a killed process makes SQLite report an I/O
+  // error on open. If the WAL holds nothing, clearing the pair is safe.
+  const wal = `${DB_PATH}-wal`, shm = `${DB_PATH}-shm`;
+  const walEmpty = !fs.existsSync(wal) || fs.statSync(wal).size === 0;
+  if (/SQLITE_IOERR/.test(err.code || '') && walEmpty) {
+    console.warn('[db] stale WAL files, clearing and reopening');
+    for (const f of [wal, shm]) { try { fs.unlinkSync(f); } catch {} }
+    db = openDb();
+  } else throw err;
+}
 db.pragma('foreign_keys = ON');
 
 db.exec(`
@@ -53,12 +70,24 @@ CREATE INDEX IF NOT EXISTS idx_hazards_segment ON hazards(segment_id);
 CREATE INDEX IF NOT EXISTS idx_photos_segment ON photos(segment_id);
 `);
 
+// additive migrations for databases created before these columns existed
+const cols = new Set(db.prepare(`PRAGMA table_info(segments)`).all().map((c) => c.name));
+const addCol = (name, type) => { if (!cols.has(name)) db.exec(`ALTER TABLE segments ADD COLUMN ${name} ${type}`); };
+addCol('source', "TEXT DEFAULT 'walk'");
+addCol('osm_id', 'INTEGER');
+addCol('geometry', 'TEXT');
+addCol('tags', 'TEXT');
+db.exec(`CREATE INDEX IF NOT EXISTS idx_segments_osm ON segments(osm_id)`);
+
 const q = {
   insertSegment: db.prepare(`INSERT INTO segments
     (name, start_lat, start_lng, end_lat, end_lng, length_m, score, walk_ok, wheelchair_ok, senior_ok,
-     walk_reason, wheelchair_reason, senior_reason, clear_width_m, surface_type, total_cost_inr, created_at)
+     walk_reason, wheelchair_reason, senior_reason, clear_width_m, surface_type, total_cost_inr, created_at,
+     source, osm_id, geometry, tags)
     VALUES (@name, @start_lat, @start_lng, @end_lat, @end_lng, @length_m, @score, @walk_ok, @wheelchair_ok, @senior_ok,
-     @walk_reason, @wheelchair_reason, @senior_reason, @clear_width_m, @surface_type, @total_cost_inr, @created_at)`),
+     @walk_reason, @wheelchair_reason, @senior_reason, @clear_width_m, @surface_type, @total_cost_inr, @created_at,
+     @source, @osm_id, @geometry, @tags)`),
+  osmIds: db.prepare(`SELECT osm_id FROM segments WHERE osm_id IS NOT NULL`),
   insertPhoto: db.prepare(`INSERT INTO photos (segment_id, filename, hash, width_m, observations, status, created_at)
     VALUES (@segment_id, @filename, @hash, @width_m, @observations, @status, @created_at)`),
   insertHazard: db.prepare(`INSERT INTO hazards (segment_id, photo_id, type_id, severity, note, bbox, cost_inr, authority)
@@ -70,7 +99,9 @@ const q = {
   hazardsFor: db.prepare(`SELECT * FROM hazards WHERE segment_id = ? ORDER BY severity DESC, id`),
   count: db.prepare(`SELECT COUNT(*) AS n FROM segments`),
   stats: db.prepare(`SELECT
-    (SELECT COUNT(*) FROM segments) AS segments,
+    (SELECT COUNT(*) FROM segments WHERE source = 'walk' OR source IS NULL) AS segments,
+    (SELECT COUNT(*) FROM segments WHERE source = 'osm') AS open_data_segments,
+    (SELECT COUNT(*) FROM photos WHERE filename IS NOT NULL) AS photos,
     (SELECT COUNT(*) FROM hazards) AS hazards,
     (SELECT COALESCE(SUM(length_m), 0) FROM segments) AS metres,
     (SELECT COALESCE(AVG(score), 0) FROM segments) AS avg_score,
@@ -99,6 +130,10 @@ const saveSegment = db.transaction((graded, photos) => {
     surface_type: graded.surface_type,
     total_cost_inr: graded.total_cost_inr,
     created_at: graded.created_at || now(),
+    source: graded.source || 'walk',
+    osm_id: graded.osm_id || null,
+    geometry: graded.geometry ? JSON.stringify(graded.geometry) : null,
+    tags: graded.tags ? JSON.stringify(graded.tags) : null,
   });
   const segmentId = Number(info.lastInsertRowid);
   for (const p of photos) {
@@ -147,6 +182,10 @@ function rowToSegment(row) {
     hazard_count: row.hazard_count,
     photo_count: row.photo_count,
     created_at: row.created_at,
+    source: row.source || 'walk',
+    osm_id: row.osm_id || null,
+    geometry: row.geometry ? JSON.parse(row.geometry) : null, // [[lng,lat],...]
+    tags: row.tags ? JSON.parse(row.tags) : null,
   };
 }
 
@@ -183,8 +222,8 @@ function toGeoJSON() {
     features: q.allSegments.all().map((row) => ({
       type: 'Feature',
       id: row.id,
-      geometry: { type: 'LineString', coordinates: [[row.start_lng, row.start_lat], [row.end_lng, row.end_lat]] },
-      properties: rowToSegment(row),
+      geometry: { type: 'LineString', coordinates: row.geometry ? JSON.parse(row.geometry) : [[row.start_lng, row.start_lat], [row.end_lng, row.end_lat]] },
+      properties: (() => { const p = rowToSegment(row); delete p.geometry; delete p.tags; return p; })(),
     })),
   };
 }
@@ -193,6 +232,8 @@ function stats() {
   const s = q.stats.get();
   return {
     segments: s.segments,
+    open_data_segments: s.open_data_segments,
+    photos: s.photos,
     hazards: s.hazards,
     km_covered: +(s.metres / 1000).toFixed(2),
     avg_score: Math.round(s.avg_score),
@@ -206,4 +247,6 @@ function isEmpty() {
   return q.count.get().n === 0;
 }
 
-module.exports = { db, saveSegment, getSegment, allSegments, toGeoJSON, stats, isEmpty };
+function knownOsmIds() { return new Set(q.osmIds.all().map((r) => r.osm_id)); }
+
+module.exports = { db, saveSegment, getSegment, allSegments, toGeoJSON, stats, isEmpty, knownOsmIds };

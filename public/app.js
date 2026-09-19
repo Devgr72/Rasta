@@ -151,15 +151,17 @@
       set('segments', s.segments); set('hazards', s.hazards);
       set('km_covered', s.km_covered, (v) => v.toFixed(1));
       set('total_cost_inr', s.total_cost_inr, fmtINR);
+      const od = $('[data-stat-wrap="open_data_segments"]'); if (od) { od.hidden = !s.open_data_segments; set('open_data_segments', s.open_data_segments); }
       updateLensNote();
     } catch (err) { toast(`Stats unavailable: ${err.message}`, 'error'); }
   }
   function updateLensNote() {
     const el = $('#lens-note'); const s = state.stats; if (!s) return;
-    if (state.lens === 'score') el.innerHTML = `Coloured by accessibility score. Average across the city is <b>${s.avg_score}</b>.`;
-    else if (state.lens === 'wheelchair') el.innerHTML = `<b>${s.wheelchair_ok_count} of ${s.segments}</b> walked footpaths can be used in a wheelchair.`;
-    else if (state.lens === 'senior') el.innerHTML = `<b>${s.senior_ok_count} of ${s.segments}</b> walked footpaths are safe for an 80-year-old.`;
-    else { const ok = M.getFeatures().filter((f) => f.properties.verdicts.walk.ok).length; el.innerHTML = `<b>${ok} of ${s.segments}</b> footpaths are passable on foot without a detour.`; }
+    const total = s.segments + (s.open_data_segments || 0);
+    if (state.lens === 'score') el.innerHTML = `Coloured by accessibility score. Average across the map is <b>${s.avg_score}</b>.`;
+    else if (state.lens === 'wheelchair') el.innerHTML = `<b>${s.wheelchair_ok_count} of ${total}</b> mapped footpaths can be used in a wheelchair.`;
+    else if (state.lens === 'senior') el.innerHTML = `<b>${s.senior_ok_count} of ${total}</b> mapped footpaths are safe for an 80-year-old.`;
+    else { const ok = M.getFeatures().filter((f) => f.properties.verdicts.walk.ok).length; el.innerHTML = `<b>${ok} of ${total}</b> mapped footpaths are passable on foot without a detour.`; }
   }
   $$('.lens-opt').forEach((b) => b.addEventListener('click', () => {
     state.lens = b.dataset.lens;
@@ -207,16 +209,40 @@
     el('score').classList.add(band);
     el('score-num').textContent = seg.score;
     el('name').textContent = seg.name;
-    el('meta').textContent = `${seg.length_m} m · ${seg.hazards.length} hazard${seg.hazards.length === 1 ? '' : 's'} · ${seg.photos.length} photo${seg.photos.length === 1 ? '' : 's'}${seg.clear_width_m != null ? ` · ${seg.clear_width_m.toFixed(1)} m clear` : ''}`;
+    const nPhotos = seg.photos.filter((p) => p.url).length;
+    el('meta').textContent = `${seg.length_m} m · ${seg.hazards.length} hazard${seg.hazards.length === 1 ? '' : 's'} · ${nPhotos ? `${nPhotos} photo${nPhotos === 1 ? '' : 's'}` : seg.source === 'osm' ? 'from map tags' : 'no photos'}${seg.clear_width_m != null ? ` · ${seg.clear_width_m.toFixed(1)} m clear` : ''}`;
     el('verdicts').innerHTML = verdictsHtml(seg.verdicts);
     el('close').addEventListener('click', () => { M.clearSelection(); showEmpty(); if (isPhone()) setSheet(false); });
     el('report').href = `/report.html?id=${seg.id}`;
+    el('walk').addEventListener('click', () => {
+      const pts = [seg.start, seg.end];
+      setTab('contribute'); M.setPicks(pts); $('#seg-name').value = seg.name.replace(/ \((footway|footpath|road|steps)\)$/, '');
+      $('[data-step="name"]').classList.add('is-done'); M.flyToSegment(seg.id);
+      toast('Points set from this stretch. Add photos to verify it.', 'ok');
+    });
+    if (seg.source === 'osm') {
+      const src = el('source'); src.hidden = false;
+      src.innerHTML = `Graded from <a href="https://www.openstreetmap.org/way/${seg.osm_id}" target="_blank" rel="noopener">OpenStreetMap tags</a>, not yet photographed. Walk it to confirm what is on the ground.`;
+      el('walk').textContent = 'Verify this stretch with photos';
+    }
+    // other readings of the same stretch
+    (async () => {
+      try {
+        const mid = { lat: (seg.start.lat + seg.end.lat) / 2, lng: (seg.start.lng + seg.end.lng) / 2 };
+        const r = await api(`/api/segments/near?lat=${mid.lat}&lng=${mid.lng}&r=60`);
+        const others = r.segments.filter((s) => s.id !== seg.id);
+        if (!others.length) return;
+        const also = host.querySelector('[data-el="also"]'); if (!also) return;
+        also.innerHTML = `<h3>Also mapped here</h3><ul>${others.slice(0, 5).map((s) => `<li><button type="button" data-view="${s.id}"><span class="sc" style="background:${M.scoreColor(s.score)}">${s.score}</span><span>${esc(s.name)}<br><small>${s.source === 'osm' ? 'OpenStreetMap tags' : `walked ${new Date(s.created_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}`} · ${s.distance_m} m away</small></span></button></li>`).join('')}</ul>`;
+        $$('[data-view]', also).forEach((b) => b.addEventListener('click', () => { const id = Number(b.dataset.view); M.flyToSegment(id); M.select(id); }));
+      } catch {}
+    })();
 
     // photos with boxes
     const photos = el('photos');
     const shots = new Map();
     if (!seg.photos.some((p) => p.url)) {
-      photos.innerHTML = `<div class="shot none">No photos on file for this stretch. Walk it again with the camera to add them.</div>`;
+      photos.innerHTML = `<div class="shot none">${seg.source === 'osm' ? 'No photos yet. This grade comes from map tags alone.' : 'No photos on file for this stretch. Walk it again with the camera to add them.'}</div>`;
     }
     for (const p of seg.photos) {
       if (!p.url) continue;
@@ -270,6 +296,25 @@
     $('#points-hint').textContent = points.length === 0 ? 'Tap the map where you started, then where you stopped.' : points.length === 1 ? 'Now tap where you stopped.' : 'Drag the markers to adjust.';
     $('[data-step="points"]').classList.toggle('is-done', points.length === 2);
     updateAnalyseState();
+    checkNearby(points);
+  }
+  let nearbyTimer = null;
+  function checkNearby(points) {
+    const box = $('#nearby');
+    clearTimeout(nearbyTimer);
+    if (!points.length) { box.hidden = true; return; }
+    const c = points.length === 2 ? { lat: (points[0].lat + points[1].lat) / 2, lng: (points[0].lng + points[1].lng) / 2 } : points[0];
+    nearbyTimer = setTimeout(async () => {
+      try {
+        const r = await api(`/api/segments/near?lat=${c.lat}&lng=${c.lng}&r=${points.length === 2 ? 60 : 80}`);
+        if (!r.count) { box.hidden = true; return; }
+        const walks = r.segments.filter((s) => s.source !== 'osm').length;
+        box.hidden = false;
+        box.innerHTML = `<b>Already mapped here.</b> ${walks ? `Walked ${walks} time${walks === 1 ? '' : 's'}` : 'Only OpenStreetMap tags so far'}${r.count > walks ? `, ${r.count - walks} from open data` : ''}. Your photos will add a fresh reading.
+          <ul>${r.segments.slice(0, 3).map((s) => `<li><button type="button" data-view="${s.id}">${esc(s.name)}</button><span class="sc" style="color:${M.scoreColor(s.score)}">${s.score}</span></li>`).join('')}</ul>`;
+        $$('[data-view]', box).forEach((b) => b.addEventListener('click', () => { const id = Number(b.dataset.view); setTab('map'); M.flyToSegment(id); setTimeout(() => M.select(id), 400); }));
+      } catch { box.hidden = true; }
+    }, 250);
   }
   $('#btn-clear-points').addEventListener('click', () => { M.clearPicks(); onSegPoints([]); });
   $('#seg-name').addEventListener('input', (e) => { $('[data-step="name"]').classList.toggle('is-done', e.target.value.trim().length > 2); });
@@ -494,6 +539,21 @@
     M.highlightRoute(i);
   }
 
+  // ---------- open data import ----------
+  $('#btn-import').addEventListener('click', async () => {
+    const btn = $('#btn-import');
+    if (M.getZoom() < 13) { toast('Zoom in to a neighbourhood first, then import', 'error'); return; }
+    btn.classList.add('is-busy'); btn.disabled = true; btn.querySelector('span').textContent = 'Asking OpenStreetMap…';
+    try {
+      const r = await api('/api/import/osm', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(M.getBounds()) });
+      await loadSegments(); loadStats();
+      if (r.imported) toast(`Added ${r.imported} footpath${r.imported === 1 ? '' : 's'} graded from OpenStreetMap tags${r.already_known ? `, ${r.already_known} already here` : ''}`, 'ok');
+      else if (r.already_known) toast(`All ${r.already_known} tagged footpaths in view were already imported`, 'ok');
+      else toast('OpenStreetMap has no accessibility tags for footpaths in this view yet. Walk one to be the first.', '');
+    } catch (err) { toast(err.message, 'error'); }
+    finally { btn.classList.remove('is-busy'); btn.disabled = false; btn.querySelector('span').textContent = 'Add OpenStreetMap data for this area'; }
+  });
+
   // ---------- map buttons ----------
   $('#btn-fit').addEventListener('click', M.fitAll);
   $('#btn-locate').addEventListener('click', async () => {
@@ -511,6 +571,7 @@
       const health = await api('/api/health');
       if (health.mock) { const s = $('#ledger-status'); s.hidden = false; s.textContent = 'Mock vision — add ANTHROPIC_API_KEY to .env'; }
     } catch { toast('Server unreachable', 'error'); }
+    try { const cfg = await api('/api/config'); if (cfg.google_maps_key) M.enableGoogle(cfg.google_maps_key); } catch {}
     try { state.standards = await api('/api/standards'); state.types = Object.fromEntries(state.standards.hazard_types.map((t) => [t.id, t])); } catch { toast('Knowledge file failed to load — hazard labels will be raw ids', 'error'); }
     const gj = await loadSegments();
     if (gj && gj.features.length) M.fitAll();
